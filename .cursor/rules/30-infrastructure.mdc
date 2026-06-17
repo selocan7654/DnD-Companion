@@ -1,0 +1,218 @@
+---
+description: Docker Compose, CI workflow, env, migration/seed, monorepo script — altyapı dosyaları düzenlenirken.
+globs:
+  - "docker-compose.yml"
+  - "docker-compose*.yml"
+  - "**/Dockerfile"
+  - "**/Dockerfile.*"
+  - ".github/**"
+  - "infrastructure/**"
+---
+
+# DnD Companion — Infrastructure & DevOps
+
+Lokal altyapı Docker Compose ile; API ve frontend **host'ta** hot-reload çalışır. CI GitHub Actions üzerinden merge gate sağlar. Deploy platformu henüz seçilmedi — `[INF-OPEN-1]` kapanmadan production-specific config varsayımı yok.
+
+## Docker Compose İlkesi
+
+`docker-compose.yml` yalnızca **PostgreSQL 16** ve **Redis 7** servis eder. NestJS ve Vite container'a taşınmaz (lokal DX).
+
+```yaml
+# ✓ Doğru — infra only
+services:
+  postgres:
+    image: postgres:16-alpine
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U dnd_user -d dnd_companion']
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+
+# ✗ Yanlış — API/FE compose içinde (hot-reload kaybı)
+services:
+  api:
+    build: ./apps/api
+```
+
+| Komut | Kullanım |
+| --- | --- |
+| `docker compose up -d` | Lokal Postgres + Redis başlat |
+| `docker compose down` | Durdur (volume korunur) |
+| `docker compose down -v` | Temiz başlangıç — volume sil |
+
+Test DB ayrı compose veya CI service container olabilir (`docker-compose.test.yml` opsiyonel). CI'da Postgres/Redis **service** olarak tanımlanır — `docs/09` Bölüm 7.
+
+## Lokal Kurulum Sırası
+
+```bash
+pnpm install
+cp .env.example .env          # secret'ları düzenle
+docker compose up -d
+pnpm --filter api prisma migrate dev
+pnpm --filter api prisma db seed
+pnpm --filter api dev         # :3000
+pnpm --filter web dev         # :5173, /api proxy → backend
+```
+
+Sıra değişmez: migrate → seed → uygulama. Seed idempotent olmalı (`upsert` / email varsa atla).
+
+## Environment Variables
+
+| Kural | Açıklama |
+| --- | --- |
+| `.env` commit edilmez | `.gitignore`'da; şablon `.env.example` |
+| Yeni env → PR'da `.env.example` güncelle | CI ve yeni geliştiriciler için zorunlu |
+| Secret CI log'unda yok | GitHub Actions `env:` ile inject; echo yasak |
+| Ortamlar | `development` \| `staging` \| `production` |
+
+Zorunlu gruplar: `DATABASE_URL`, `REDIS_URL`, `JWT_*_SECRET`, `FRONTEND_URL`/`APP_URL`. Tam liste → `docs/09` Bölüm 4.
+
+```env
+# ✓ Doğru — .env.example placeholder
+JWT_ACCESS_SECRET="change-me-access-secret-min-32-chars"
+
+# ✗ Yanlış — gerçek production secret repo'da
+JWT_ACCESS_SECRET="sk-live-abc123real"
+```
+
+Production secret'ları deployment platform secret store'unda; agent production deploy komutu çalıştırmaz (`docs/10` Bölüm 9).
+
+## CI Pipeline (GitHub Actions)
+
+Sıra sabit — job bağımlılıkları bu sırayı korur:
+
+```
+lint → type-check → test-backend → test-frontend → security → build
+```
+
+| Job | Özet | Merge gate |
+| --- | --- | --- |
+| `lint` | `pnpm lint` | Evet |
+| (lint içinde) type-check | `pnpm --filter api/web exec tsc --noEmit` | Evet |
+| `test-backend` | `migrate deploy` + `pnpm --filter api test -- --ci --coverage` | Evet |
+| `test-frontend` | `pnpm --filter web test -- --ci --coverage` | Evet |
+| `security` | `pnpm audit --audit-level=critical` | Evet |
+| `build` | `pnpm --filter web build` + `pnpm --filter api build` | Evet |
+
+```yaml
+# ✓ Doğru — backend test öncesi migrate deploy
+- run: pnpm --filter api prisma migrate deploy
+  env:
+    DATABASE_URL: postgresql://test_user:test_pass@localhost:5432/dnd_companion_test
+- run: pnpm --filter api test -- --ci --coverage
+  env:
+    DATABASE_URL: ...
+    REDIS_URL: redis://localhost:6379
+    JWT_ACCESS_SECRET: ci-test-access-secret-32chars-min
+    NODE_ENV: test
+
+# ✗ Yanlış — migrate atlanmış integration test
+- run: pnpm --filter api test
+```
+
+CI workflow değişikliği: required check adları `main` branch protection ile uyumlu kalmalı. `pnpm install --frozen-lockfile` zorunlu.
+
+**Deploy job yok** — platform seçilince `build` sonrası manuel onay gate (`environment: production`) eklenir.
+
+## Migration Prosedürü
+
+| Ortam | Komut | Ne yapar |
+| --- | --- | --- |
+| Lokal geliştirme | `pnpm --filter api prisma migrate dev --name <kebab-case>` | SQL üret + uygula + client generate |
+| CI / staging / prod | `pnpm --filter api prisma migrate deploy` | Commit'li migration'ları sırayla uygula |
+
+```bash
+# ✓ Doğru — anlamlı migration adı
+pnpm --filter api prisma migrate dev --name add-campaign-setting-field
+
+# ✗ Yanlış — prod'da migrate dev
+pnpm --filter api prisma migrate dev
+```
+
+Migration PR kuralları:
+
+- Migration dosyaları `apps/api/prisma/migrations/` altında commit edilir
+- PR açıklamasında tablo/alan değişikliği belirtilir
+- Merge öncesi seed hâlâ çalışır doğrulanır
+- Otomatik rollback yok — ters migration veya PITR (`docs/09` Bölüm 8)
+
+## Seed Script
+
+`apps/api/prisma/seed.ts`: admin hesabı (env'den) + resmi 5e referans verisi (`seed-data/*.json`).
+
+- **Idempotent:** `upsert` veya "varsa atla"
+- `owner_id = NULL`, `status = PUBLISHED`, `source` = kitap kodu (resmi içerik)
+- `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` yalnızca env'den
+
+Migration PR'ında: `pnpm --filter api prisma db seed` yeşil olmalı.
+
+## Monorepo Script'leri
+
+Root `package.json` kısayolları — CI ve dokümantasyonla uyumlu tut:
+
+| Script | Komut |
+| --- | --- |
+| `pnpm lint` | ESLint tüm monorepo |
+| `pnpm typecheck` | `tsc --noEmit` api + web |
+| `pnpm test` | api + web test |
+| `pnpm build` | web build → api build |
+| `pnpm dev:api` / `pnpm dev:web` | Geliştirme sunucuları |
+
+Package filter: `pnpm --filter api <cmd>`, `pnpm --filter web <cmd>`.
+
+## Git & PR (Infra Bağlamı)
+
+- `main`'e doğrudan push yasak — feature branch + PR
+- Infra PR'ları: Conventional Commit (`chore(ci):`, `chore(docker):`)
+- Agent PR açar, **merge etmez** — insan CI + review onayı (`docs/10` Bölüm 9)
+- Yeni GitHub secret → dokümante et (`.env.example` veya deploy doc); değeri commit etme
+
+## Human Gate'ler (Faz / Infra)
+
+Faz sonu veya büyük infra değişikliğinde insan doğrular:
+
+| Kontrol | Doğrulama |
+| --- | --- |
+| CI yeşil | Tüm required check'ler geçti |
+| Seed çalışır | `docker compose down -v` → `up -d` → migrate → seed |
+| Temiz kurulum | Yeni klon + `docs/09` Bölüm 2 adımları |
+| Açık TODO yok | `// TODO: mimari karar gerekiyor` kalmadı |
+
+Production deploy yalnızca insan + manuel onay gate — agent `deploy` çalıştırmaz.
+
+## Husky / Pre-commit
+
+`lint-staged` commit öncesi değişen dosyalarda lint+format. CI aynı kuralları tekrar doğrular — hook bypass merge güvencesi değil.
+
+## Backup (Bilgi)
+
+Lokal: volume yeterli; `down -v` + migrate + seed ile sıfırlanır. Production PITR/backup `[INF-OPEN-3]` — platform seçilince doğrulanır. Infra rule'da backup otomasyonu kurma.
+
+## Infra Değişikliği Checklist
+
+```
+[ ] docker-compose yalnızca Postgres + Redis (lokal)
+[ ] Yeni env → .env.example güncellendi
+[ ] CI job sırası: lint → typecheck → test → security → build
+[ ] test-backend: migrate deploy + service healthcheck
+[ ] Secret/log sızıntısı yok
+[ ] Migration PR: seed doğrulandı
+[ ] [INF-OPEN-1] varsayımı yapılmadı (deploy platform)
+[ ] Agent merge/deploy yapmadı
+```
+
+## Anti-pattern'ler
+
+- ❌ `.env` veya gerçek secret commit
+- ❌ CI'da `migrate dev` (yalnızca `migrate deploy`)
+- ❌ API/FE'yi lokal compose'a ekleme (MVP lokal DX)
+- ❌ Required check kaldırma veya `continue-on-error: true` (security hariç değil)
+- ❌ Lockfile güncellemeden CI cache kırma
+- ❌ Deploy job'ı otomatik production'a — onay gate olmadan
+- ❌ Infra değişikliği + feature aynı PR (mümkünse ayır)
+- ❌ Spec tablosunu rule'a kopyalama — `docs/09` referansı yeterli
+
+---
+
+Detay: `docs/09_DEV_WORKFLOW.md` Bölüm 2–9, 12; `docs/10_IMPLEMENTATION_ROADMAP.md` Bölüm 9; `docs/mimari-kararlar.md` [INF-OPEN-1], [INF-OPEN-3]

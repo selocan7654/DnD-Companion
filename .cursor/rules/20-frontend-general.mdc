@@ -1,0 +1,284 @@
+---
+description: React frontend genel — klasör yapısı, layout, Redux auth, WS client, upload, responsive. apps/web/src düzenlemelerinde.
+globs:
+  - "apps/web/src/**"
+---
+
+# DnD Companion — Frontend Genel
+
+React + Vite SPA (`apps/web/`); production'da NestJS `apps/web/dist` statik serve edilir. API prefix `/api/v1`; ayrı CDN/Vercel yok. Bu kural domain glob dosyaları (21–25) ile birlikte yüklenir — ortak mimari ve çapraz concern'ler burada.
+
+Güvenlik checklist → `03-security-baseline.mdc` (tekrarlanmaz).
+
+## Monorepo Konumu
+
+```
+apps/web/src/
+  main.tsx, App.tsx
+  routes/ layouts/ pages/
+  features/          # domain bileşen + logic
+  components/        # paylaşılan UI (shadcn/ui üzeri)
+  store/             # Redux Toolkit + RTK Query
+  hooks/ lib/ styles/
+```
+
+- **pages/** — route-level sayfa; ince orchestration.
+- **features/** — domain UI (`CampaignCard`, `CharacterSheet`, `DmNotesPanel`).
+- **components/** — domain-agnostik (`Pagination`, `EmptyState`, `ImageUpload`).
+- Paylaşılan tipler/Zod → `packages/shared` ([CODE-002]); FE'de çift şema yazma.
+
+## Provider ve Bootstrap
+
+```typescript
+// ✓ Doğru — main.tsx provider sırası
+<Provider store={store}>
+  <RouterProvider router={router} />
+</Provider>
+
+// ✗ Yanlış — TanStack Query + RTK Query çift data layer
+<QueryClientProvider><Provider store={store}>...</Provider></QueryClientProvider>
+```
+
+Uygulama açılışında refresh cookie ile sessiz oturum restore (`POST /auth/refresh`, `credentials: 'include'`). `isInitializing` bitene kadar full-screen spinner; sonra router mount.
+
+## Auth State — Memory Only [SEC-004]
+
+Access token **yalnızca** Redux `authSlice` memory'de. Refresh httpOnly cookie — tarayıcı yönetir.
+
+```typescript
+// ✓ Doğru — authSlice
+interface AuthState {
+  user: User | null;
+  accessToken: string | null;
+}
+
+// ✗ Yanlış — kalıcı depolama
+localStorage.setItem('accessToken', token);
+sessionStorage.setItem('token', token);
+```
+
+Logout: `POST /auth/logout` → `clearCredentials()` → `disconnectSocket()` → `/login`.
+
+`useAuth` hook selector wrapper — `isAuthenticated`, `isAdmin`, `isEmailVerified`, bootstrap sırasında `isLoading: true`.
+
+```typescript
+// hooks/useAuth.ts — ✓ Doğru
+export function useAuth() {
+  const { user, accessToken, isLoading } = useAppSelector((s) => s.auth);
+  return {
+    user,
+    accessToken,
+    isAuthenticated: !!user,
+    isAdmin: user?.role === 'ADMIN',
+    isEmailVerified: !!user?.emailVerifiedAt,
+    isLoading,
+  };
+}
+```
+
+Reauth sonrası token rotation memory'de kalır; cookie tarayıcıda. **Asla** `persist` middleware ile auth slice hydrate etme.
+
+Detay → `23-frontend-rtk-query.mdc` (reauth wrapper); route guard UX → `21-frontend-routes.mdc`.
+
+## Layout Sistemi
+
+| Layout | Kullanım | Auth |
+| --- | --- | --- |
+| `PublicLayout` | Login, register, galeri, reference | Opsiyonel |
+| `AppLayout` | Campaign, character, profile | Zorunlu (`AuthGuard`) |
+| `AdminLayout` | `/admin/*` | `AuthGuard` + `AdminGuard` |
+
+**AppLayout responsive:**
+- `lg+`: sol sidebar (`w-64`) + header (breadcrumb, user menu).
+- `< lg`: hamburger off-canvas nav + bottom nav (Campaigns, Characters, Reference, Homebrew, Profile).
+
+**Full-width varyant:** DM Screen — sidebar gizli, içerik tam genişlik.
+
+Admin sidebar bölümü yalnızca `user.role === 'ADMIN'` iken render — UX; backend `RolesGuard` asıl sınır.
+
+## State Stratejisi
+
+| Concern | Araç |
+| --- | --- |
+| Auth (user, accessToken) | `authSlice` |
+| Sunucu verisi | RTK Query (`store/api/*`) |
+| Form state | React Hook Form (local) |
+| WS live fields | RTK cache patch + `useWebSocket` |
+
+Global client state için Context/Zustand ekleme — Redux + RHF yeterli.
+
+## WebSocket Client
+
+Socket.io yalnızca DM Screen live fields ve campaign member events ([WS-001]). Singleton `lib/socket.ts`:
+
+```typescript
+// ✓ Doğru — auth token handshake
+socket = io(window.location.origin, {
+  auth: { token: accessToken },
+  transports: ['websocket'],
+});
+
+// ✗ Yanlış — WS olmadan polling fallback açma (spec: websocket only)
+transports: ['polling', 'websocket']
+```
+
+`useWebSocket(campaignId)`: mount'ta `join-campaign`, unmount'ta `leave-campaign` + listener cleanup. Event adları kebab-case (`character:live-update`). Cache güncelleme → `charactersApi.util.updateQueryData`.
+
+DM Screen ve Campaign Detail'de hook çağrılır. Logout'ta `disconnectSocket()`.
+
+### Dinleyici ve Event Özeti
+
+| Event | Aksiyon |
+| --- | --- |
+| `character:live-update` | `updateQueryData` on `getCharacter` |
+| `campaign:member-joined` | `invalidateTags` Campaign |
+| `campaign:member-left` | `invalidateTags` Campaign |
+
+Client emit: `join-campaign`, `leave-campaign` — payload `{ campaignId }` camelCase JSON.
+
+Reconnect: exponential backoff 1s → 2s → 4s → 8s (max 30s). Token expire → reauth → socket reconnect.
+
+## Oturum Akışı (Frontend)
+
+1. **Login** — mutation → `setCredentials` → navigate `/campaigns`.
+2. **Sayfa yenileme** — `App.tsx` refresh bootstrap → yeni access token memory.
+3. **401 API** — `baseQueryWithReauth` silent refresh; başarısız → `clearCredentials`.
+4. **Session expired** — `SessionExpiredModal` (S-SESSION-EXPIRED); kapatılamaz; login CTA.
+5. **Logout** — API + state clear + socket disconnect.
+
+Refresh endpoint user bilgisi dönebilir — `updateUser` veya tam `setCredentials`.
+
+## lib/ Yardımcıları
+
+| Dosya | Rol |
+| --- | --- |
+| `socket.ts` | Socket.io singleton connect/disconnect |
+| `imageResize.ts` | Canvas resize before upload |
+| `formatters.ts` | Tarih, sayı, liste format (locale `en-US`) |
+
+Utility'ler React bağımlılığı taşımaz — test edilebilir pure fonksiyon.
+
+## Image Upload Akışı
+
+Client-side only resize + presigned PUT ([SEC-012]):
+
+1. MIME kontrolü: `image/png`, `image/jpeg`, `image/webp` — SVG **yasak**.
+2. `resizeImage()` — avatar 512px; diğerleri 1600px max genişlik.
+3. `POST /uploads/presign` → `PUT` object storage.
+4. Dönen `publicUrl` ilgili kaynağa `PATCH`.
+
+`ImageUpload.tsx` paylaşılan bileşen; purpose prop (`avatar` | `character` | `campaign` | `homebrew`).
+
+## Responsive Özet (Mobile-First)
+
+Tailwind varsayılan breakpoint'ler; özel breakpoint **eklenmez**.
+
+| Ekran | Masaüstü (`lg+`) | Mobil |
+| --- | --- | --- |
+| DM Screen | 2 kolon: Players (sol) + DM Notes (sağ) | `Tabs`: Players \| Notes |
+| Character Sheet | 2–3 kolon grid | Tek sütun + `Accordion` |
+| Homebrew Gallery | 3–4 kolon grid + filtre sidebar | Tek sütun + filtre `Sheet` |
+| Campaign Detail | Banner + yan yana grid | Stack |
+
+DM Screen implementasyonu → `features/dm-screen/`; detay `24-frontend-components.mdc`.
+
+## Erişim Kontrolü (UX)
+
+Frontend guard ve koşullu render **yalnızca UX** — güvenlik backend policy'de ([AUTH-007]).
+
+| Koşul | UI |
+| --- | --- |
+| `!user` | Login/Register; kısıtlı nav |
+| `!emailVerifiedAt` | `EmailVerificationBanner`; yazma butonları disabled + tooltip |
+| Kampanya DM değil | Edit, Delete, Invite gizli |
+| Karakter sahibi/DM değil | Edit, Delete gizli |
+| `role !== ADMIN` | Admin nav gizli |
+
+API `403`/`404` döndüğünde UI güvenilmez — toast + yönlendirme.
+
+## Error Handling
+
+RTK Query hataları: `error.data.message` (İngilizce) toast; `403` + `EMAIL_NOT_VERIFIED` → warning toast. `429` → retry mesajı. `5xx` → generic server error.
+
+Form: backend `details[{ field, issue }]` → `form.setError(field, { message: issue })`.
+
+Global error boundary → `ServerErrorPage` (S-500). Route 404 → `NotFoundPage` (S-404).
+
+## Performans (Özet)
+
+- Route lazy load: `React.lazy` + `Suspense` — admin, Character Builder, DM Screen **zorunlu**.
+- Vendor chunks: `react-vendor`, `redux-vendor`, `ui-vendor` (Vite `manualChunks`).
+- `lodash` tree-shake: `import debounce from 'lodash/debounce'`.
+- Debounce: arama 300ms; builder auto-save 500ms.
+- `keepUnusedDataFor`: default 60s; reference 300s.
+- WS push güncellemelerinde gereksiz refetch yok.
+
+Lighthouse hedefleri bilgilendirme — hard gate değil (`04-quality-gates.mdc`).
+
+### Görsel Yükleme Performansı
+
+- Viewport dışı img: `loading="lazy"`.
+- LCP banner: `fetchpriority="high"`.
+- Kart görselleri: sabit `aspect-ratio` → CLS < 0.1 hedefi.
+
+### Dev Proxy
+
+Vite dev server API proxy → `localhost` NestJS (`/api/v1`). Production'da same-origin — CORS sorunu yok.
+
+## Public vs Protected Read (FE)
+
+| Kaynak | Auth |
+| --- | --- |
+| `reference/*` | Opsiyonel — misafir okur |
+| Published homebrew galeri | Opsiyonel |
+| Campaign, private character | Token zorunlu (API 404) |
+
+Misafir RTK Query: endpoint auth gerektirmiyorsa `Authorization` header opsiyonel; `credentials` yine `include` (sessiz refresh için).
+
+## Ekran Kataloğu Referansı
+
+Yeni sayfa eklerken `docs/06_SCREEN_CATALOG.md` ekran ID'sini (`S-*`) page yorumunda veya PR'da belirt. Tam alan tablosu rule'a kopyalanmaz — ekran detayı prosedür → `41-add-new-screen` (sonraki paketler).
+
+Örnek ID'ler: `S-DM-SCREEN`, `S-CHAR-BUILDER`, `S-HOMEBREW-GALLERY`, `S-ADMIN-USERS`.
+
+## Yeni Kod Checklist
+
+```
+[ ] Doğru klasör: pages vs features vs components
+[ ] UI metinleri İngilizce
+[ ] Access token localStorage/sessionStorage yok (03 checklist)
+[ ] Route guard UX; yetki API'de doğrulanır
+[ ] Shared Zod şeması kullanıldı (form)
+[ ] RTK Query endpoint baseApi.injectEndpoints ile
+[ ] a11y: 25-frontend-a11y.mdc (tsx düzenlemelerinde)
+[ ] Screen ID docs/06 ile hizalı (yeni ekran)
+```
+
+## Glob Örtüşmesi (Bilinçli)
+
+| Dosya | Kurallar |
+| --- | --- |
+| `routes/**`, `pages/**` | 20 + 21 |
+| `*Form*.tsx`, `builder/**` | 20 + 22 |
+| `store/**` | 20 + 23 |
+| `features/**`, `components/**` | 20 + 24 |
+| `**/*.tsx` | 20 + 25 |
+
+Çelişki → **docs kazanır**.
+
+## Anti-pattern'ler
+
+- ❌ Access token localStorage/sessionStorage
+- ❌ Route guard'ı güvenlik sınırı sanma
+- ❌ TanStack Query veya axios paralel data layer
+- ❌ SVG upload veya client MIME bypass
+- ❌ Türkçe UI string
+- ❌ Domain logic'i `components/ui/` altına koyma
+- ❌ WS event'lerde camelCase (`joinCampaign` yerine `join-campaign`)
+- ❌ Spec route/alan tablosunu rule'a kopyalama
+- ❌ Özel Tailwind breakpoint ekleme
+- ❌ `fetch` ile ham API çağrısı (RTK Query dışında, refresh bootstrap hariç)
+
+---
+
+Detay: `docs/05_FRONTEND_SPEC.md` Bölüm 1, 3, 6–9, 11–14; `docs/06_SCREEN_CATALOG.md` Bölüm 1; `docs/07_SECURITY_IMPLEMENTATION.md` Bölüm 2–3

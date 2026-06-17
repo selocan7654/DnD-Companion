@@ -1,0 +1,148 @@
+---
+alwaysApply: true
+---
+
+# DnD Companion — Kalite Kapıları
+
+PR merge ve MVP "tamamlandı" tanımı bu kapılardan geçer. Genel coverage yüzdesi hard gate değil; **kritik güvenlik katmanları** istisnadır.
+
+## CI Pipeline (Zorunlu — Hepsi Yeşil)
+
+GitHub Actions sırası: **lint → type-check → test → security audit → build**
+
+| Job | Komut | Merge gate |
+| --- | --- | --- |
+| lint | `pnpm lint` + per-package `tsc --noEmit` | Evet |
+| test-backend | `pnpm --filter api test -- --ci --coverage` | Evet |
+| test-frontend | `pnpm --filter web test -- --ci --coverage` | Evet |
+| security | `pnpm audit --audit-level=critical` | Evet |
+| build | `pnpm --filter web build` + `pnpm --filter api build` | Evet |
+
+`main` branch protection: tüm required check'ler geçmeden merge **engellenir**. Agent kullanıcı onayı olmadan merge/deploy etmez.
+
+## Test Piramidi
+
+| Katman | Araç | Öncelik |
+| --- | --- | --- |
+| BE integration | Jest + supertest + gerçek Postgres | En yüksek |
+| BE unit | Jest + Prisma mock | Yüksek |
+| FE component | Vitest + Testing Library + msw | Orta |
+| E2E | Playwright vb. | MVP'de **yok** |
+
+Yetkilendirme hatası UI bug'ından maliyetli — auth/policy önce test edilir.
+
+## Coverage Eşikleri (Hard Gate — İstisna Alanlar)
+
+Genel repo coverage minimumu **yok** (düşük değerli test teşvik edilmez). Aşağıdaki path'ler `jest.config.ts` `coverageThreshold` ile zorlanır:
+
+| Path | Branch / line hedefi |
+| --- | --- |
+| `src/common/policies/` | %100 |
+| `src/common/guards/` | %100 |
+| `src/auth/` | ≥ %95 |
+
+Yeni policy veya guard → test aynı PR'da. Integration test: gerçek DB, factory + `afterEach` truncate.
+
+### Integration Test İskeleti
+
+```typescript
+// test/setup.ts — migrate deploy + afterEach truncate
+// test/factories/ — createTestUser, createTestCampaign
+// *.controller.spec.ts — supertest + authHeader(token)
+
+it('403 — non-member cannot read campaign', async () => {
+  const res = await request(app.getHttpServer())
+    .get(`/api/v1/campaigns/${campaign.id}`)
+    .set(authHeader(strangerToken));
+  expect(res.status).toBe(404); // yetki gizleme
+});
+```
+
+Auth helper: `loginAsUser(app, email, password)` → `docs/08_TESTING_STRATEGY.md` Bölüm 4.
+
+## Lint ve Format
+
+- ESLint flat config (root); React hooks kuralları `apps/web/**`
+- Prettier: singleQuote, semi, printWidth 100, LF
+- Husky pre-commit: `lint-staged` (eslint --fix + prettier)
+- CI lint tekrar doğrular — lokal hook bypass güvenilir değil
+
+```bash
+pnpm lint && pnpm typecheck && pnpm test
+```
+
+## PR Checklist (Agent)
+
+- [ ] Conventional Commit / PR başlığı
+- [ ] Yetki değişikliği → integration test matrisi
+- [ ] Yeni env → `.env.example`
+- [ ] Migration → seed çalışıyor
+- [ ] `03-security-baseline.mdc` 6'lı checklist
+- [ ] UI metinleri İngilizce
+- [ ] Spec duplikasyonu yok — doc referansı yeterli
+
+## Erişilebilirlik (a11y)
+
+WCAG 2.1 AA temel gereksinimleri her bileşende:
+
+- Tüm interaktif öğeler klavye ile erişilebilir; görünür `focus-visible:ring`
+- İkon butonlarda `aria-label`; formlarda label + `aria-invalid` / `aria-describedby`
+- Modal: focus trap, `role="dialog"`, `aria-modal`
+- Renk tek başına anlam taşımaz — metin/ikon eşlik eder
+- Dinamik `<title>` per route
+
+Tam ARIA tablosu spec'te — rule'a kopyalama. Yeni UI bileşeninde a11y kontrolü self-review'a dahil.
+
+## Bundle ve Performans
+
+- MVP'de bundle size hard gate **yok**
+- Faz 5 bilgilendirme: Lighthouse hedefi ~70+ performance, ~80+ a11y — **kesin eşik değil**, regresyon uyarısı
+- Liste endpoint'leri cursor pagination; `limit` max 50
+- Gereksiz client dependency ekleme — stack pin'li ([00-project-identity.mdc])
+
+## Migration ve Seed Kalitesi
+
+- Prisma Migrate; migration dosyaları commit edilir
+- `migrate dev` (lokal) / `migrate deploy` (CI/staging/prod)
+- Her migration PR'da seed'in çalıştığı doğrulanır
+- Rollback: ters migration veya PITR — otomatik rollback yok
+
+## MVP Başarı Kriterleri (Özet)
+
+Çalışır auth, campaign+invite, character builder, DM Screen WS, homebrew+galeri, koleksiyon, 5e referans seed, admin panel, yetkilendirme integration testleri, CI yeşil — tam liste `docs/00_PROJECT_OVERVIEW.md` Bölüm 10.
+
+## Frontend Test Kapıları
+
+- Vitest + Testing Library; API mock için msw (RTK Query testleri)
+- Kritik bileşenler: `AuthGuard`, form validation, koşullu render (DM-only butonlar)
+- Her yeni form → validation error state testi (İngilizce mesaj assert)
+- CSS import test ortamında kapalı (`css: false` vitest config)
+
+## Deploy ve Production Gate'leri
+
+- Deploy job: `build` sonrası, **manuel onay** (`environment: production`)
+- `[INF-OPEN-1]` kapanmadan production-specific config varsayımı yok
+- `[INF-OPEN-3]` — MVP canlıya çıkmadan backup/PITR doğrulanmalı
+- Migration production'da `migrate deploy` — `migrate dev` prod'da **yasak**
+
+## Yerel Doğrulama (PR Öncesi)
+
+```bash
+pnpm install
+docker compose up -d
+pnpm --filter api prisma migrate dev   # migration PR'da
+pnpm lint && pnpm typecheck && pnpm test
+pnpm --filter web build && pnpm --filter api build
+```
+
+## Bilinçli Olmayan Gate'ler
+
+- Genel %80 coverage hedefi
+- E2E paketi zorunluluğu
+- Lighthouse performance hard fail
+- Audit log admin UI
+- Bundle size budget (MVP)
+
+---
+
+Detay: `docs/08_TESTING_STRATEGY.md` Bölüm 1–2, 8–9; `docs/09_DEV_WORKFLOW.md` Bölüm 7, 10; `docs/05_FRONTEND_SPEC.md` Bölüm 13; `docs/00_PROJECT_OVERVIEW.md` Bölüm 10

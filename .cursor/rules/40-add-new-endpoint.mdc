@@ -1,0 +1,270 @@
+---
+description: Step-by-step procedure to add a REST endpoint (controller, DTO, service, policy, tests, API contract). Use when creating POST/PATCH/GET/DELETE under /api/v1, extending a NestJS module, or implementing a new API resource.
+---
+
+# Add New REST Endpoint — Procedure
+
+One endpoint = one PR slice when possible. Read spec **before** code. Glob patterns → `14-backend-controllers.mdc`, `10-backend-general.mdc`; this how-to is the ordered checklist.
+
+## Step 0: Preconditions
+
+- [ ] Endpoint defined or updated in `docs/03_API_CONTRACTS.md` (path, method, auth, request/response, status codes).
+- [ ] Domain rules in `docs/01_DOMAIN_MODEL.md` if new resource or state transition.
+- [ ] DB change needed? → `@42-add-prisma-migration` first, then return here.
+- [ ] New permission rule? → `@43-add-authorization-policy` in same PR.
+
+Load: `docs/03_API_CONTRACTS.md` (relevant §), `docs/04_BACKEND_SPEC.md` Bölüm 2–3, `docs/07_SECURITY_IMPLEMENTATION.md` Bölüm 5.
+
+## Step 1: Choose Module and Route
+
+| Resource | Module path | Controller prefix |
+| --- | --- | --- |
+| Campaign | `apps/api/src/campaigns/` | `campaigns` |
+| Character | `apps/api/src/characters/` | `characters` |
+| Homebrew | `apps/api/src/homebrew/` | `homebrew` |
+| Auth | `apps/api/src/auth/` | `auth` |
+| Admin | `apps/api/src/admin/` | `admin` |
+
+New resource type → new NestJS module per `docs/04_BACKEND_SPEC.md` Bölüm 1 ([CODE-003]). Register in `app.module.ts`.
+
+Path: `/api/v1/<kebab-resource>` — global prefix in `main.ts`, controller uses relative path only.
+
+## Step 2: DTO (Request Validation)
+
+Create `create-*.dto.ts` / `update-*.dto.ts` in module `dto/` folder.
+
+```typescript
+// apps/api/src/campaigns/dto/create-campaign.dto.ts
+import { IsString, IsOptional, MaxLength } from 'class-validator';
+
+export class CreateCampaignDto {
+  @IsString()
+  @MaxLength(100)
+  name: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  description?: string;
+}
+```
+
+- Body/query: `class-validator` + global `ValidationPipe` (whitelist, forbidNonWhitelisted).
+- Shared Zod for JSONB homebrew `data` → validate in **service** with `packages/shared` schema (`docs/04` Bölüm 7).
+- List query: reuse `common/dto/list-query.dto.ts` — `limit` max 50, cursor pagination (`docs/03` Bölüm 1).
+
+## Step 3: Controller (Thin)
+
+```typescript
+@Controller('campaigns')
+export class CampaignsController {
+  constructor(private readonly campaignsService: CampaignsService) {}
+
+  @Post()
+  @RequireVerifiedEmail()
+  @HttpCode(HttpStatus.CREATED)
+  create(@CurrentUser() user: AuthUser, @Body() dto: CreateCampaignDto) {
+    return this.campaignsService.create(user, dto);
+  }
+
+  @Get(':id')
+  findOne(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
+    return this.campaignsService.findOne(id, user);
+  }
+}
+```
+
+Decorator checklist (`docs/04` Bölüm 4):
+
+| Concern | Decorator |
+| --- | --- |
+| Public read | `@Public()` |
+| Verified write | `@RequireVerifiedEmail()` |
+| Admin only | `@Roles(Role.ADMIN)` |
+| UUID param | `ParseUUIDPipe` |
+
+**Never** put Prisma or policy `if` chains in controller.
+
+## Step 4: Service (Business Logic + Policy)
+
+```typescript
+async findOne(id: string, user: AuthUser) {
+  const campaign = await this.prisma.campaign.findUnique({
+    where: { id },
+    include: { members: true },
+  });
+  if (!campaign || !CampaignPolicy.canRead(user, campaign)) {
+    throw new NotFoundException(); // 404 — no existence leak
+  }
+  return { data: campaign };
+}
+```
+
+- Policy in `common/policies/` — `@43-add-authorization-policy`.
+- 404 vs 403: unauthorized read → **404**; known resource, forbidden write → **403** (`docs/07` Bölüm 5.3).
+- Response envelope: `{ data }` or list `{ data, nextCursor, hasMore }` (`docs/03` Bölüm 1).
+- Errors: `{ statusCode, error, message, details? }` — `error` SCREAMING_SNAKE, `message` English.
+
+## Step 5: Module Wiring
+
+```typescript
+@Module({
+  imports: [PrismaModule],
+  controllers: [CampaignsController],
+  providers: [CampaignsService],
+  exports: [CampaignsService],
+})
+export class CampaignsModule {}
+```
+
+Export service only if another module injects it (e.g. WebSocket broadcast).
+
+## Step 6: Shared Types (if needed)
+
+If FE needs new enums or response shapes → `packages/shared` first, then import in API and web. Single source ([CODE-002]).
+
+## Step 7: Integration Tests (Mandatory for Auth)
+
+Location: `apps/api/test/` or `*.controller.spec.ts` beside module.
+
+Minimum matrix per `docs/08_TESTING_STRATEGY.md` Bölüm 5:
+
+| Actor | Typical expectation |
+| --- | --- |
+| `owner` | 200/201 on own resource |
+| `otherUser` | 404 (read) or 403 (write) |
+| `unverified` | 403 on verified-only writes |
+| `guest` | 401 |
+| `ADMIN` | bypass where spec says |
+
+```typescript
+it('404 — non-member cannot read campaign', async () => {
+  const res = await request(app.getHttpServer())
+    .get(`/api/v1/campaigns/${campaign.id}`)
+    .set(authHeader(strangerToken));
+  expect(res.status).toBe(404);
+});
+```
+
+Use `test/factories/` + `loginAsUser` (`docs/08` Bölüm 4). Real Postgres test DB.
+
+## Step 8: Update API Contract Doc
+
+If implementation diverged from spec → update `docs/03_API_CONTRACTS.md` **in same PR**:
+
+- Method, path, auth column
+- Request body fields
+- Success response shape and status
+- Error codes
+
+## Step 9: Frontend Hook (if user-facing)
+
+When endpoint is consumed by UI:
+
+1. Add RTK Query endpoint in `apps/web/src/features/<domain>/*Api.ts` (`docs/05` Bölüm 5).
+2. Tag invalidation for related lists.
+3. Do **not** rely on FE for security — backend guard is source of truth.
+
+## Step 10: Pre-PR Verification
+
+```bash
+pnpm lint
+pnpm typecheck
+pnpm --filter api test -- --ci
+```
+
+Checklist (`03-security-baseline.mdc`):
+
+```
+[ ] POST/PATCH/PUT/DELETE has guard + policy
+[ ] Prisma only — no raw SQL
+[ ] password_hash / refresh token not in response or logs
+[ ] DTO validation on all inputs
+[ ] Auth integration tests for permission matrix
+[ ] docs/03 updated if contract changed
+```
+
+## Anti-patterns
+
+- ❌ Guard'sız write endpoint
+- ❌ Controller with 20+ line permission logic
+- ❌ Offset pagination (`?page=2`)
+- ❌ Turkish `message` strings
+- ❌ Copying full API tables into `.mdc` or code comments
+- ❌ Integration tests skipped for new auth rules
+
+## HTTP Status Quick Reference
+
+| Case | Status | `error` example |
+| --- | --- | --- |
+| Created | 201 | — |
+| Success body | 200 | — |
+| Delete success | 204 | no body |
+| Validation | 400 | `VALIDATION_ERROR` |
+| Unauthenticated | 401 | — |
+| Email not verified | 403 | `EMAIL_NOT_VERIFIED` |
+| Forbidden write | 403 | `FORBIDDEN` |
+| Not found / unauthorized read | 404 | — |
+| Conflict | 409 | `ALREADY_MEMBER` |
+| Business rule | 422 | `LAST_ADMIN` |
+| Rate limit | 429 | `TOO_MANY_REQUESTS` |
+
+Full taxonomy → `docs/03_API_CONTRACTS.md` Bölüm 2.
+
+## Nested and Admin Routes
+
+| Pattern | Example |
+| --- | --- |
+| Sub-resource | `@Controller('campaigns/:campaignId/dm-notes')` |
+| Action endpoint | `@Post(':id/invite/regenerate')` |
+| Admin namespace | `@Controller('admin/users')` + `@Roles(Role.ADMIN)` |
+
+Nested routes still delegate to service; load parent resource for policy chain.
+
+## List Endpoints
+
+```typescript
+async findAll(user: AuthUser, query: ListQueryDto) {
+  const limit = Math.min(query.limit ?? 20, 50);
+  const items = await this.prisma.campaign.findMany({
+    take: limit + 1,
+    cursor: query.cursor ? { id: query.cursor } : undefined,
+    where: this.buildListWhere(user),
+    orderBy: { createdAt: 'desc' },
+  });
+  const hasMore = items.length > limit;
+  const data = hasMore ? items.slice(0, limit) : items;
+  return {
+    data,
+    nextCursor: hasMore ? data[data.length - 1].id : null,
+    hasMore,
+  };
+}
+```
+
+Filter/sort params per resource § in `docs/03`.
+
+## Custom Business Exceptions
+
+Use `common/exceptions/` for domain errors (`LastAdminException`, `InvalidInviteTokenException`). Map to envelope in filter — do not return raw strings.
+
+## Troubleshooting
+
+| Problem | Check |
+| --- | --- |
+| 401 on all routes | `@Public()` missing on auth/reference reads |
+| 403 EMAIL_NOT_VERIFIED | `@RequireVerifiedEmail()` on write |
+| Validation strips fields | DTO missing decorator; `whitelist` drops unknown |
+| 500 on JSONB | Zod `safeParse` in service before Prisma write |
+
+## Decision Triggers
+
+| Situation | Action |
+| --- | --- |
+| New framework or major library | `@45-write-architectural-decision` before coding |
+| WebSocket side-effect on write | Also `@47-websocket-live-fields` |
+| Faz work | Branch via `@48-git-phase-branch` |
+
+---
+
+Detay: `docs/03_API_CONTRACTS.md`; `docs/04_BACKEND_SPEC.md` Bölüm 2–7; `docs/07_SECURITY_IMPLEMENTATION.md` Bölüm 5; `docs/08_TESTING_STRATEGY.md` Bölüm 4–5

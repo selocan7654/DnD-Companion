@@ -1,0 +1,210 @@
+---
+description: Step-by-step procedure to refactor code toward existing NestJS/React patterns without behavior change. Use when cleaning up anti-patterns, extracting policy from controller, aligning module structure, or reducing duplication per project conventions.
+---
+
+# Refactor to Pattern — Procedure
+
+Refactor = **same behavior**, better structure. One concern per PR when possible. Do not mix behavior changes with structural moves.
+
+## Step 0: Preconditions
+
+- [ ] Identify target pattern from glob rules (`10`–`17` BE, `20`–`25` FE) or `docs/04` / `docs/05`.
+- [ ] Existing tests green before refactor (`pnpm test`).
+- [ ] No open architectural decision required — if stack/pattern change needed → `@45-write-architectural-decision` first.
+
+Load: relevant glob rule + `docs/04_BACKEND_SPEC.md` or `docs/05_FRONTEND_SPEC.md` section.
+
+## Step 1: Classify Refactor Type
+
+| Type | Target pattern | Doc |
+| --- | --- | --- |
+| Fat controller | thin controller → service | `docs/04` Bölüm 2, `14-backend-controllers.mdc` |
+| Inline auth | extract to `*.policy.ts` | `docs/04` Bölüm 5, `43-add-authorization-policy` |
+| Duplicate DTO validation | shared Zod in `packages/shared` | `docs/04` Bölüm 7 |
+| Raw fetch | RTK Query endpoint | `docs/05` Bölüm 4–5 |
+| God service | split by subdomain within module | `docs/04` Bölüm 1 |
+| Repository layer | remove — use Prisma in service | `10-backend-general.mdc` |
+
+**Out of scope:** new features, API contract changes, schema migrations.
+
+## Step 2: Establish Safety Net
+
+Before moving code:
+
+```bash
+pnpm --filter api test -- <affected-spec>
+pnpm --filter web test -- <affected-spec>
+```
+
+If coverage missing on touched auth path → add characterization tests **first** (`docs/08` Bölüm 1).
+
+```
+[ ] Integration tests exist for endpoints being refactored
+[ ] Policy tests exist if extracting authorization
+[ ] FE tests for forms/guards if touching auth UI
+```
+
+## Step 3: Backend Refactor Sequence
+
+### 3a. Extract policy from controller
+
+1. Create `common/policies/<resource>.policy.ts` with static methods.
+2. Move `if` chains from controller/service into policy.
+3. Service calls policy; throws `NotFoundException` / `ForbiddenException`.
+4. Delete duplicate checks.
+5. Run auth integration matrix (`docs/08` Bölüm 5).
+
+### 3b. Thin controller
+
+Move Prisma and business rules to service:
+
+```typescript
+// Before (wrong)
+@Patch(':id')
+async update(@CurrentUser() user, @Param('id') id, @Body() dto) {
+  const c = await this.prisma.campaign.findUnique({ where: { id } });
+  // 30 lines...
+}
+
+// After (correct)
+@Patch(':id')
+update(@CurrentUser() user, @Param('id') id, @Body() dto: UpdateCampaignDto) {
+  return this.campaignsService.update(id, user, dto);
+}
+```
+
+### 3c. Shared validation
+
+1. Define Zod schema in `packages/shared`.
+2. FE: RHF resolver imports schema.
+3. BE: service `safeParse` for JSONB; DTO for flat fields.
+4. Remove duplicate validation logic.
+
+## Step 4: Frontend Refactor Sequence
+
+### 4a. Move to feature folder
+
+```
+pages/campaigns/CampaignListPage.tsx  → thin page
+features/campaigns/CampaignList.tsx     → presentation
+features/campaigns/campaignsApi.ts      → data layer
+```
+
+### 4b. Consolidate RTK Query
+
+Replace scattered `fetch` / `axios` with API slice endpoints. Single `baseQuery` with auth header injection (`docs/05` Bölüm 4).
+
+### 4c. Extract reusable components
+
+Only when **second** consumer exists — avoid premature abstraction (`01-coding-philosophy.mdc`).
+
+## Step 5: Mechanical Moves (Git-Friendly)
+
+Prefer sequence that keeps CI green:
+
+1. Extract new file with copied logic (tests pass).
+2. Switch call sites to new file.
+3. Delete old code.
+4. Rename if needed.
+
+Avoid single commit that renames and rewrites simultaneously without tests.
+
+## Step 6: Verify Behavior Unchanged
+
+```bash
+pnpm lint && pnpm typecheck
+pnpm test
+```
+
+Manual spot-check for refactors touching:
+
+| Area | Verify |
+| --- | --- |
+| Auth | login, 401, 403 EMAIL_NOT_VERIFIED |
+| Campaign | member vs DM access |
+| Pagination | cursor still works |
+| WS | live update still broadcasts |
+
+## Step 7: PR Description
+
+Use `refactor` commit type:
+
+```
+refactor(campaigns): extract CampaignPolicy from service
+
+No behavior change. Moves authorization checks to common/policies.
+```
+
+PR body must state **"No behavior change"** or list intentional fixes separately.
+
+## Step 8: When to Stop (Not a Refactor)
+
+Escalate to feature PR or ADR if refactor requires:
+
+| Trigger | Action |
+| --- | --- |
+| New npm dependency | `@45-write-architectural-decision` |
+| API response shape change | update `docs/03` + version concern |
+| DB schema change | `@42-add-prisma-migration` |
+| New endpoint | `@40-add-new-endpoint` |
+
+## Anti-patterns
+
+- ❌ Refactor + feature in one PR without clear separation
+- ❌ Adding repository/DAO layer on top of Prisma
+- ❌ Behavior change disguised as rename
+- ❌ Deleting tests that fail after refactor instead of fixing
+- ❌ Drive-by reformat of unrelated files
+- ❌ Introducing TanStack Query "while here"
+
+## Module Boundary Rules
+
+Per `docs/04_BACKEND_SPEC.md` Bölüm 2:
+
+- Domain logic stays in domain module services.
+- `common/` only for cross-cutting guards, policies, filters.
+- Do not import `CampaignsService` from `CharactersModule` for circular deps — extract shared helper to `common/` only if truly generic.
+
+## Frontend State Refactor
+
+Consolidating to Redux:
+
+1. Identify server state → RTK Query.
+2. Identify UI-only state → component `useState` or small slice.
+3. Avoid duplicating API entities in second slice.
+
+Auth slice remains source for `accessToken` (memory) and `user` profile.
+
+## Measuring Success
+
+```
+[ ] File line count reduced or responsibility clarified
+[ ] Cyclomatic complexity of controller near zero
+[ ] No new eslint-disable comments
+[ ] Test count same or higher
+[ ] git diff shows move-heavy, not rewrite-heavy (optional: git log --stat)
+```
+
+## Troubleshooting
+
+| Risk | Mitigation |
+| --- | --- |
+| Silent behavior change | Compare integration test status codes before/after |
+| Broken DI | Update module `providers`/`exports` after extract |
+| Duplicate policy | Single policy class — delete inline copies |
+| RTK cache stale | Preserve tag names when renaming endpoints |
+
+## Checklist
+
+```
+[ ] Tests green before and after
+[ ] No new guard-less write endpoints
+[ ] Policy coverage maintained at 100% for touched policies
+[ ] No spec duplication added to .mdc files
+[ ] PR scoped to one pattern/concern
+[ ] Conventional commit: refactor(<scope>): ...
+```
+
+---
+
+Detay: `docs/04_BACKEND_SPEC.md` Bölüm 1–5; `docs/05_FRONTEND_SPEC.md` Bölüm 1–5; `docs/09_DEV_WORKFLOW.md` Bölüm 5–6; `docs/08_TESTING_STRATEGY.md` Bölüm 1

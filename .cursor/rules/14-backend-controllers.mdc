@@ -1,0 +1,350 @@
+---
+description: REST controllers — decorator stack, DTO binding, HTTP status, envelope, thin controller. *.controller.ts düzenlemelerinde.
+globs:
+  - "apps/api/**/*.controller.ts"
+---
+
+# DnD Companion — Backend Controllers
+
+Controller yalnızca HTTP sınırıdır: route tanımı, guard metadata, DTO binding, service delegasyonu. İş mantığı, Prisma ve policy **service'de** ([AUTH-003]).
+
+Genel pipeline → `10-backend-general.mdc`; policy detayı → `12-backend-authorization.mdc`.
+
+## Controller Stack (Sıra)
+
+```typescript
+// ✓ Doğru — tipik protected write
+@Controller('campaigns')
+export class CampaignsController {
+  constructor(private readonly campaignsService: CampaignsService) {}
+
+  @Post()
+  @RequireVerifiedEmail()
+  @HttpCode(HttpStatus.CREATED)
+  create(@CurrentUser() user: AuthUser, @Body() dto: CreateCampaignDto) {
+    return this.campaignsService.create(user.id, dto);
+  }
+
+  @Get(':id')
+  findOne(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
+    return this.campaignsService.findOne(id, user);
+  }
+
+  @Patch(':id')
+  @RequireVerifiedEmail()
+  update(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateCampaignDto,
+  ) {
+    return this.campaignsService.update(id, user, dto);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async remove(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
+    await this.campaignsService.remove(id, user);
+  }
+}
+
+// ✗ Yanlış — controller'da policy ve Prisma
+@Patch(':id')
+async update(@CurrentUser() user, @Param('id') id, @Body() dto) {
+  const c = await this.prisma.campaign.findUnique({ where: { id } });
+  if (c.ownerId !== user.id) throw new ForbiddenException();
+  return this.prisma.campaign.update({ where: { id }, data: dto });
+}
+```
+
+## Decorator Referansı
+
+| Decorator | Ne zaman | Global mi |
+| --- | --- | --- |
+| `@Public()` | Auth gerektirmeyen read (reference, auth, published gallery) | JwtAuthGuard bypass |
+| `@RequireVerifiedEmail()` | Create/write campaign, character, homebrew, collection | EmailVerifiedGuard |
+| `@Roles(Role.ADMIN)` | `/admin/*` controller veya method | RolesGuard |
+| `@CurrentUser()` | Auth user inject | — |
+
+Global guard'lar `APP_GUARD` — `@UseGuards(JwtAuthGuard)` tekrarı gereksiz unless override.
+
+## HTTP Status Konvansiyonu
+
+| Method | Başarı | Not |
+| --- | --- | --- |
+| `GET` | `200` | `{ data }` |
+| `POST` (create) | `201` | `@HttpCode(201)` veya default |
+| `PATCH`/`PUT` | `200` | Updated entity `{ data }` |
+| `DELETE` | `204` | Body yok |
+| Validation fail | `400` | Global filter → `details[]` |
+
+Business rule ihlali: `409` Conflict, `422` Unprocessable (örn. `LAST_ADMIN`).
+
+Yetki: dışarıdan read yok → service `NotFoundException`; yazma yetkisiz → `ForbiddenException`.
+
+## Path ve Prefix
+
+Global prefix `api/v1` — controller path'ler prefix **içermez**:
+
+```typescript
+// ✓ Doğru
+@Controller('campaigns')          // → /api/v1/campaigns
+@Controller('campaigns/:id/dm-notes')
+
+// ✗ Yanlış
+@Controller('api/v1/campaigns')
+```
+
+Nested resource: `campaigns/:campaignId/dm-notes` — campaignId `ParseUUIDPipe`.
+
+Admin: `@Controller('admin/users')` + class-level `@Roles(Role.ADMIN)`.
+
+## Request / Response Envelope
+
+Controller service dönüşünü doğrudan serialize eder; wrapper service veya interceptor'da:
+
+```typescript
+// Service return shape (tercih)
+return { data: campaign };
+
+// Liste
+return { data: items, nextCursor, hasMore };
+```
+
+Controller'da manuel envelope unutma — service tutarlı dönsün.
+
+Hata fırlatma service'den; controller try/catch ile sarmalama (global filter yeterli).
+
+## DTO ve Query Binding
+
+```typescript
+// ✓ Doğru
+@Get()
+findAll(@CurrentUser() user: AuthUser, @Query() query: ListQueryDto) {
+  return this.service.findAll(user, query);
+}
+
+// ✗ Yanlış — query validate yok
+@Get()
+findAll(@Query('limit') limit: string) {
+  return this.service.findAll({ limit: Number(limit) });
+}
+```
+
+`ValidationPipe` global — DTO class tipi şart. Raw `@Body() body: any` yasak.
+
+## Param Pipe'ları
+
+- UUID: `ParseUUIDPipe` veya custom `ParseUuidPipe`
+- Enum query: DTO `@IsIn([...])`
+
+## Public vs Optional Auth
+
+Reference ve homebrew galeri: `@Public()` — `user` yok; service `AuthUser | null` alır (character public read).
+
+```typescript
+@Get('homebrew/:id')
+@Public()
+findOne(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user?: AuthUser) {
+  return this.homebrewService.findOne(id, user ?? null);
+}
+```
+
+`@CurrentUser()` optional: guard public ise `user` undefined olabilir — service policy null handle eder.
+
+## Auth Controller İstisnaları
+
+`auth.controller.ts`:
+- Login/register: `@Public()`; cookie set `res.cookie` ( `@Res({ passthrough: true })` ).
+- Refresh: `@Public()`; cookie'den refresh oku.
+- Logout: auth gerekli.
+
+Refresh endpoint Bearer değil cookie — özel handler.
+
+## Admin Controller
+
+```typescript
+@Controller('admin/campaigns')
+@Roles(Role.ADMIN)
+export class AdminContentController {
+  @Patch(':id')
+  update(@CurrentUser() admin: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateCampaignDto) {
+    return this.adminService.updateCampaign(admin.id, id, dto);
+  }
+}
+```
+
+Admin write → `AuditLogService.log()` service içinde (17). Controller audit çağırmaz.
+
+## Upload Controller
+
+Tek endpoint `POST /uploads/presign` — `@RequireVerifiedEmail()`, DTO `contentType`, `fileSize`.
+
+## Swagger / OpenAPI
+
+MVP'de zorunlu değil; eklenirse decorator'lar controller'da, spec docs/03 ile senkron.
+
+## Controller Test
+
+Integration (`*.controller.spec.ts`):
+- Status code + envelope shape
+- Auth: 401 public olmayan; 403 unverified write
+- 404 yetkisiz campaign read
+- Admin 403 for USER
+
+Unit test controller'da değil — service/policy'de ağırlık.
+
+## Dosya Adlandırma
+
+- `campaigns.controller.ts`
+- Alt feature: `members.controller.ts`, `invite.controller.ts`
+- Admin: `admin-users.controller.ts`, `admin-content.controller.ts`
+
+Tek controller dosyası 200 satırı aşarsa alt feature split (13).
+
+## Checklist (Yeni Endpoint)
+
+```
+[ ] Path docs/03 ile uyumlu (kebab-case)
+[ ] Doğru HTTP method ve status
+[ ] @Public / @RequireVerifiedEmail / @Roles doğru
+[ ] DTO tip güvenli; forbidNonWhitelisted uyumlu
+[ ] ParseUUIDPipe path id'lerde
+[ ] İş mantığı service'de
+[ ] Response { data } envelope
+[ ] Yazma → integration yetki testi
+```
+
+## Özel Controller Örnekleri
+
+### Invite (public + auth mix)
+
+```typescript
+@Controller('invite')
+export class InviteController {
+  @Get(':token')
+  @Public()
+  preview(@Param('token') token: string) {
+    return this.inviteService.preview(token);
+  }
+
+  @Post(':token/join')
+  @RequireVerifiedEmail()
+  join(@CurrentUser() user: AuthUser, @Param('token') token: string) {
+    return this.inviteService.join(token, user);
+  }
+}
+```
+
+### Auth refresh (cookie)
+
+```typescript
+@Post('refresh')
+@Public()
+@HttpCode(200)
+refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+  return this.authService.refresh(req.cookies?.refreshToken, res);
+}
+```
+
+## Conflict ve Business Error Response
+
+```typescript
+throw new ConflictException({
+  error: 'ALREADY_MEMBER',
+  message: 'User is already a member of this campaign',
+});
+
+throw new UnprocessableEntityException({
+  error: 'LAST_ADMIN',
+  message: 'Cannot remove the last admin from the system',
+});
+```
+
+## Query DTO — Liste Endpoint'leri
+
+Tüm `GET` listelerde `ListQueryDto` veya extend:
+
+```typescript
+export class CampaignListQueryDto extends ListQueryDto {
+  @IsOptional()
+  @IsIn(['name', 'createdAt'])
+  sort?: string;
+}
+```
+
+`limit` service'de `Math.min(query.limit ?? 20, 50)` — DTO max validator ile çift koruma.
+
+## @HttpCode Zorunlu Durumlar
+
+| Durum | Decorator |
+| --- | --- |
+| POST create | `@HttpCode(201)` veya Nest default |
+| DELETE success | `@HttpCode(204)` |
+| POST action (logout) | `200` default |
+
+## Param Sırası Konvansiyonu
+
+```typescript
+method(
+  @CurrentUser() user: AuthUser,
+  @Param('id', ParseUUIDPipe) id: string,
+  @Body() dto: UpdateDto,
+)
+```
+
+User her zaman ilk; path param ikinci; body son.
+
+## Nested Controller Path
+
+```typescript
+@Controller('campaigns/:campaignId/dm-notes')
+export class DmNotesController {
+  @Get()
+  list(
+    @CurrentUser() user: AuthUser,
+    @Param('campaignId', ParseUUIDPipe) campaignId: string,
+  ) {
+    return this.dmNotesService.list(campaignId, user);
+  }
+}
+```
+
+Parent campaign policy service içinde — controller campaign varlığını doğrulamaz.
+
+## Rate Limit Response
+
+Auth dışı endpoint'lerde global limit — controller değil middleware/guard. `429` body spec envelope.
+
+## File Upload Controller
+
+```typescript
+@Post('presign')
+@RequireVerifiedEmail()
+presign(@CurrentUser() user: AuthUser, @Body() dto: PresignRequestDto) {
+  return this.uploadsService.presign(user.id, dto);
+}
+```
+
+## Controller Satır Bütçesi
+
+Tek dosya ~150 satır hedef; aşılırsa alt feature controller split (campaigns members/invite/dm-notes pattern).
+
+## Anti-pattern'ler
+
+- ❌ Guard'sız `POST`/`PATCH`/`PUT`/`DELETE`
+- ❌ `@Body() dto: any` veya untyped body
+- ❌ Controller'da Prisma inject
+- ❌ Controller'da policy if zinciri
+- ❌ `DELETE` dönüşünde body
+- ❌ Türkçe exception message
+- ❌ `api/v1` path tekrarı
+- ❌ Admin route'ta `@Roles` unutma
+- ❌ 201 yerine 200 create
+- ❌ Service'den ham entity dönüp envelope atlama
+- ❌ `@Res()` ile tüm response manual (passthrough olmadan cookie kaybı)
+- ❌ List endpoint'te raw `@Query('limit')` without DTO
+- ❌ Public endpoint'te `@RequireVerifiedEmail()` (mantıksız kombinasyon)
+
+---
+
+Detay: `docs/04_BACKEND_SPEC.md` Bölüm 4, 7; `docs/03_API_CONTRACTS.md` Bölüm 1–2; `docs/mimari-kararlar.md` [AUTH-003], [CODE-004]

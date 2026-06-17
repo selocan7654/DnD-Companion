@@ -1,0 +1,313 @@
+---
+description: Authorization — can(user, action, resource) policy, guards, 404/403, ADMIN bypass, deaktive içerik. policies/ ve guards/ düzenlemelerinde.
+globs:
+  - "apps/api/src/common/policies/**"
+  - "apps/api/src/common/guards/**"
+  - "apps/api/src/common/decorators/**"
+  - "packages/shared/**/permissions*"
+  - "packages/shared/**/policy*"
+---
+
+# DnD Companion — Backend Authorization
+
+Yetkilendirme **hibrit**: sistem rolü (`ADMIN`/`USER` [R-001]) + sahiplik/ilişki (ReBAC-lite [AUTH-001]). DM/Player sistem rolü değil — campaign ilişkisinden doğar [R-002].
+
+Güvenlik sınırı backend'dedir; FE buton gizleme yalnızca UX [AUTH-003]. Runtime, **cache'siz** DB lookup [AUTH-002].
+
+## can(user, action, resource) Deseni
+
+Merkezi policy fonksiyonları `common/policies/`. Shared sabitler `packages/shared` — `Action`, `Resource`, `Role` enum'ları [R-004].
+
+```typescript
+// common/policies/policy.types.ts
+export type AuthUser = Pick<User, 'id' | 'role' | 'emailVerifiedAt'> | null;
+
+export function can(
+  user: AuthUser,
+  action: Action,
+  resource: Resource,
+  context: PolicyContext,
+): boolean {
+  if (user?.role === Role.ADMIN) return true; // [AUTH-008] — her zaman ilk adım
+  // resource-specific dispatch...
+}
+
+// common/policies/campaign.policy.ts
+export class CampaignPolicy {
+  static canRead(user: AuthUser, campaign: CampaignWithMembers): boolean {
+    if (user?.role === Role.ADMIN) return true;
+    if (!user) return false;
+    if (campaign.ownerId === user.id) return true;
+    return campaign.members.some((m) => m.userId === user.id);
+  }
+
+  static canUpdate(user: AuthUser, campaign: Campaign): boolean {
+    if (user?.role === Role.ADMIN) return true;
+    if (!user) return false;
+    return campaign.ownerId === user.id;
+  }
+}
+```
+
+Kaynak başına policy dosyası: `campaign.policy.ts`, `character.policy.ts`, `homebrew.policy.ts`. Genel `can()` dispatcher isteğe bağlı — tutarlılık için `Action.READ | UPDATE | DELETE` + `Resource.CAMPAIGN` kullan.
+
+```typescript
+// ✓ Doğru — service'de policy + doğru HTTP semantiği
+const campaign = await this.prisma.campaign.findUnique({ where: { id }, include: { members: true } });
+if (!campaign || !CampaignPolicy.canRead(user, campaign)) {
+  throw new NotFoundException(); // yetkisiz veya yok → 404 [AUTH-004]
+}
+if (!CampaignPolicy.canUpdate(user, campaign)) {
+  throw new ForbiddenException({ error: 'FORBIDDEN', message: 'You do not have permission to update this campaign' });
+}
+
+// ✗ Yanlış — controller'da inline yetki
+if (campaign.ownerId !== user.id) throw new ForbiddenException();
+```
+
+## 404 vs 403 Kuralı
+
+| Durum | Status | Gerekçe |
+| --- | --- | --- |
+| Kaynak yok veya okuma yetkisi yok (dışarıdan) | **404** | Varlık ifşası yok |
+| Kaynak var, kullanıcı görür ama yazma yetkisi yok | **403** | Kendi bağlamında yetki hatası |
+| Email doğrulanmamış | **403** | `EMAIL_NOT_VERIFIED` |
+
+Campaign **tamamen private** [AUTH-004]: DM + `campaign_members` dışında liste/detay yok.
+
+## Kaynak Özet Kuralları
+
+Matrisin tamamı `docs/07_SECURITY_IMPLEMENTATION.md` Bölüm 5.3 — rule'da özet:
+
+| Resource | Read (USER) | Write (USER) |
+| --- | --- | --- |
+| Campaign | owner veya member | owner (DM) only |
+| Character | PUBLIC **veya** owner **veya** campaign member/DM | owner **veya** campaign DM |
+| Homebrew | PUBLISHED galeri; DRAFT owner | owner only |
+| User | self full; other → username+avatar | self profile; admin admin routes |
+
+Character read: `visibility=PUBLIC` OR campaign ataması → üyeler görür [AUTH-005]. 1:1 campaign FK [AUTH-006].
+
+Homebrew: `DRAFT`/`PUBLISHED` state machine [W-003].
+
+## Guard Katmanı
+
+Global `APP_GUARD` sırası (HTTP):
+
+1. `JwtAuthGuard` — `@Public()` skip
+2. `EmailVerifiedGuard` — `@RequireVerifiedEmail()`
+3. `RolesGuard` — `@Roles(Role.ADMIN)` (admin routes)
+
+Policy **guard değil** — service method içinde kaynak yüklendikten sonra `can*` çağrılır. İstisna: saf rol kontrolü (`/admin/*`) → `@Roles(Role.ADMIN)` yeterli; içerik policy ADMIN bypass ile birleşir.
+
+```typescript
+// ✓ Doğru — RolesGuard admin controller'da
+@Controller('admin/users')
+@Roles(Role.ADMIN)
+export class AdminUsersController {}
+
+// ✗ Yanlış — admin kontrolünü yalnızca FE'ye bırakma
+@Patch(':id/role')
+async changeRole(@Body() dto) { /* no guard */ }
+```
+
+## Deaktive Kullanıcı İçerik Gizleme [AP-002]
+
+`is_active = false` sahibinin campaign/character/homebrew'i normal USER listelerinde görünmez:
+
+```typescript
+// USER list query — ek where
+where: {
+  owner: { isActive: true },
+  // ...
+}
+```
+
+ADMIN sorguları ve Admin Panel bu filtreyi atlar. Reactivate → içerik otomatik görünür.
+
+## Son Admin Koruması [R-003]
+
+`PATCH /admin/users/:id/role` — hedef son aktif ADMIN ve `newRole=USER` → `422` `LAST_ADMIN`.
+
+```typescript
+const adminCount = await this.prisma.user.count({
+  where: { role: Role.ADMIN, isActive: true },
+});
+if (target.role === Role.ADMIN && dto.role === Role.USER && adminCount <= 1) {
+  throw new UnprocessableEntityException({
+    error: 'LAST_ADMIN',
+    message: 'Cannot remove the last admin from the system',
+  });
+}
+```
+
+## Campaign Üyelik [AUTH-009]
+
+DM = `campaign.owner_id`; `campaign_members`'a DM eklenmez. Invite join: auth zorunlu, token geçerli, duplicate member → `409`.
+
+Member remove: yalnızca DM (veya ADMIN).
+
+## Policy Test Zorunluluğu
+
+`common/policies/` → **%100** branch coverage (`04-quality-gates.mdc`). Her yeni action/resource kombinasyonu unit test. Yetki değişen endpoint → integration test matrisi aynı PR'da [TEST-002].
+
+Test matrisi boyutları:
+- owner / non-owner
+- campaign DM / member / outsider
+- ADMIN / USER
+- verified / unverified (guard)
+- active / deactivated owner content
+
+## Policy Dosya Konvansiyonu
+
+```
+common/policies/
+  policy.types.ts      # AuthUser, PolicyContext, can()
+  campaign.policy.ts
+  character.policy.ts
+  homebrew.policy.ts
+  user.policy.ts       # profil read filtering
+```
+
+Static class metodları veya pure function — stateless, inject edilmez. Service'ler import eder.
+
+## Include Stratejisi
+
+Policy için gerekli ilişkileri tek sorguda `include`/`select` ile al — N+1 yasak değil ama gereksiz full graph çekme.
+
+Character read: `campaign` + `campaign.members` gerekebilir. Campaign read: `members` zorunlu.
+
+## Character Policy Örneği
+
+```typescript
+static canRead(user: AuthUser | null, character: CharacterWithRelations): boolean {
+  if (user?.role === Role.ADMIN) return true;
+  if (character.visibility === CharacterVisibility.PUBLIC) return true;
+  if (!user) return false;
+  if (character.ownerId === user.id) return true;
+  if (character.campaignId && character.campaign) {
+    if (character.campaign.ownerId === user.id) return true;
+    return character.campaign.members.some((m) => m.userId === user.id);
+  }
+  return false;
+}
+
+static canWrite(user: AuthUser, character: CharacterWithRelations): boolean {
+  if (user.role === Role.ADMIN) return true;
+  if (character.ownerId === user.id) return true;
+  if (character.campaignId && character.campaign?.ownerId === user.id) return true;
+  return false;
+}
+```
+
+`canUpdateVisibility` — yalnızca owner (DM değil) — ayrı method veya `Action.UPDATE_VISIBILITY`.
+
+## Homebrew Policy Örneği
+
+```typescript
+static canRead(user: AuthUser | null, item: HomebrewItem): boolean {
+  if (user?.role === Role.ADMIN) return true;
+  if (item.status === HomebrewStatus.PUBLISHED) return true;
+  if (!user) return false;
+  return item.ownerId === user.id;
+}
+
+static canWrite(user: AuthUser, item: HomebrewItem): boolean {
+  if (user.role === Role.ADMIN) return true;
+  return item.ownerId === user.id;
+}
+```
+
+Official seed (`source = OFFICIAL`) — user write policy false (admin path ayrı).
+
+## User Profil Filtreleme
+
+```typescript
+// Public profile serializer
+function toPublicUser(user: User) {
+  return { id: user.id, username: user.username, avatarUrl: user.avatarUrl };
+}
+// Self veya ADMIN → email dahil full profile
+```
+
+Service read başkası için `email` strip — controller'da değil serializer/helper'da.
+
+## RolesGuard
+
+```typescript
+@Injectable()
+export class RolesGuard implements CanActivate {
+  canActivate(context: ExecutionContext): boolean {
+    const required = this.reflector.getAllAndOverride<Role[]>(ROLES_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (!required?.length) return true;
+    const user = context.switchToHttp().getRequest().user;
+    return required.includes(user?.role);
+  }
+}
+```
+
+Yalnızca `Role.ADMIN` sistem rolü kısıtlaması — DM/Player burada **yok**.
+
+## Misafir (null user) Okuma
+
+| Resource | null user read |
+| --- | --- |
+| Reference | ✅ Public |
+| Homebrew PUBLISHED | ✅ |
+| Character PUBLIC | ✅ |
+| Campaign | ❌ |
+| Character PRIVATE | ❌ |
+| Homebrew DRAFT | ❌ |
+
+Service signature: `findOne(id, user: AuthUser | null)`.
+
+## Write Matrisi Hızlı Referans [AUTH-007]
+
+| Kaynak | USER write |
+| --- | --- |
+| Campaign | owner (DM) |
+| Character | owner veya campaign DM |
+| Homebrew | owner |
+| Visibility toggle | character owner |
+| Campaign assign | character owner + target member |
+| Invite regenerate | campaign DM |
+| Member remove | campaign DM |
+
+Tam tablo → `docs/07` Bölüm 5.3.
+
+## Policy Unit Test İskeleti
+
+```typescript
+describe('CampaignPolicy.canRead', () => {
+  it('allows campaign member', () => {
+    expect(CampaignPolicy.canRead(memberUser, campaignWithMembers)).toBe(true);
+  });
+  it('denies outsider', () => {
+    expect(CampaignPolicy.canRead(stranger, campaignWithMembers)).toBe(false);
+  });
+  it('allows ADMIN bypass', () => {
+    expect(CampaignPolicy.canRead(admin, campaignWithMembers)).toBe(true);
+  });
+});
+```
+
+## Anti-pattern'ler
+
+- ❌ Controller veya guard içinde 30 satır `if (ownerId === ...)` — policy'ye taşı
+- ❌ Yetkisiz read'te 403 (campaign/character/homebrew dışarıdan)
+- ❌ Policy sonucunu cache'leme [AUTH-002]
+- ❌ ADMIN bypass'ı policy'nin ortasında veya sonunda kontrol
+- ❌ `USER` için deaktive owner içeriğini gösterme
+- ❌ DM'i `campaign_members`'a duplicate ekleme
+- ❌ Frontend `canEdit` flag'ine güvenip service'de policy atlama
+- ❌ Yetki matrisi değişikliği testsiz merge
+- ❌ DM/Player için `@Roles('DM')` — sistem rolü yok [R-002]
+- ❌ Policy'de HTTP exception fırlatma — boolean döndür, service throw eder
+- ❌ `canRead` ve `canWrite` tek fonksiyonda birleştirme
+
+---
+
+Detay: `docs/07_SECURITY_IMPLEMENTATION.md` Bölüm 5; `docs/01_DOMAIN_MODEL.md`; `docs/mimari-kararlar.md` [AUTH-001]–[AUTH-009], [R-001]–[R-004], [AP-002]

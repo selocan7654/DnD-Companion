@@ -1,0 +1,174 @@
+---
+alwaysApply: true
+---
+
+# DnD Companion — Dil ve İsimlendirme
+
+## Dil Politikası
+
+| Alan | Dil | Kural |
+| --- | --- | --- |
+| UI (label, button, toast, error message) | **İngilizce** | Tek dil; i18n yok |
+| Kod (değişken, fonksiyon, sınıf, dosya) | İngilizce | camelCase / PascalCase |
+| API path ve query param | İngilizce kebab-case | `/api/v1/campaigns`, `?sort=name` |
+| Commit / branch / PR | İngilizce | Conventional Commits |
+| Doc yorumları (kod içi) | İngilizce tercih | Kısa, iş mantığı odaklı |
+| Bu rule seti ve `docs/` | Türkçe veya İngilizce | Spec dokümanları — koda kopyalanmaz |
+
+**Yasak:** Türkçe UI string, `tr.json` locale dosyası, çift dilli label. Domain terimleri İngilizce sabit: Campaign, Character, Homebrew, DM Screen.
+
+## Kod İsimlendirme
+
+### TypeScript / React
+
+```typescript
+// ✓ Doğru
+export class CampaignsService {}
+export function canUpdateCharacter(user: User, character: Character): boolean {}
+const inviteToken = campaign.inviteToken;
+
+// ✗ Yanlış
+export class KampanyaServisi {}
+const davetLinki = campaign.invite_token; // FE'de snake_case kullanma
+```
+
+- Dosya: `campaigns.service.ts`, `CampaignCard.tsx`, `useCampaignQuery.ts`
+- NestJS modül klasörü: kebab-case (`dm-notes/`, `magic-items/`)
+- Prisma model alanları: `snake_case` DB → `camelCase` TS (Prisma default)
+- Enum değerleri: `SCREAMING_SNAKE` — `Role.ADMIN`, `HomebrewStatus.DRAFT`
+
+### Shared Paket
+
+Ortak enum ve sabitler `packages/shared`'da tek kaynak:
+
+- `Role`, `HomebrewStatus`, `CharacterVisibility`, homebrew alt tipleri
+- `Action` / `Resource` — policy `can()` referansı
+- Zod şemaları — FE form + BE DTO ile aynı tanım ([CODE-002])
+
+### NestJS ve DTO
+
+- DTO dosyası: `create-campaign.dto.ts`, `update-live-fields.dto.ts`
+- Controller: `campaigns.controller.ts`; Service: `campaigns.service.ts`
+- Guard/decorator: `jwt-auth.guard.ts`, `@CurrentUser()`, `@SkipEmailVerification()`
+- Policy: `campaign.policy.ts` — `canRead`, `canUpdate`, `canDelete`
+
+### Frontend
+
+- Sayfa: `CampaignListPage.tsx` (`pages/campaigns/`)
+- Feature bileşen: `InviteLinkManager.tsx` (`features/campaigns/`)
+- RTK Query API slice: `campaignsApi.ts` — endpoint adları camelCase: `getCampaigns`, `createCampaign`
+- Hook: `useAppSelector`, `useAppDispatch` — Redux Toolkit convention
+- Route path: kebab-case URL `/campaigns/:id/dm-screen`
+
+### Test Dosyaları
+
+- Backend: `campaigns.service.spec.ts`, `campaigns.controller.spec.ts` (integration — supertest)
+- Frontend: `CampaignCard.test.tsx` veya `CampaignCard.spec.tsx` (Vitest)
+- Factory: `test/factories/user.factory.ts`
+
+## API Hata Kodları
+
+Machine-readable `error` alanı **SCREAMING_SNAKE_CASE**; `message` kullanıcıya İngilizce:
+
+```typescript
+// ✓ Doğru
+throw new ForbiddenException({
+  error: 'EMAIL_NOT_VERIFIED',
+  message: 'Please verify your email to perform this action',
+});
+
+// ✗ Yanlış
+throw new ForbiddenException('Lütfen emailinizi doğrulayın');
+```
+
+HTTP status ve envelope → `docs/03_API_CONTRACTS.md` Bölüm 2. Validation `details[].issue` metinleri İngilizce.
+
+Login/register hatalarında genel mesaj: `"Invalid email or password"` — enumeration yok.
+
+## Git Konvansiyonları
+
+### Branch
+
+```
+<type>/<short-description>
+
+feat/campaign-invite-regeneration
+fix/auth-guard-public-routes
+test/character-ownership-matrix
+```
+
+### Conventional Commits
+
+```
+<type>(<scope>): <description>
+
+feat(campaigns): add invite link regeneration endpoint
+fix(auth): prevent refresh token reuse after rotation
+test(characters): add ownership guard integration tests
+```
+
+Tipler: `feat` | `fix` | `chore` | `refactor` | `test` | `docs`
+
+Scope örnekleri: `auth`, `campaigns`, `characters`, `homebrew`, `web`, `shared`, `ci`, `db`
+
+### PR
+
+- Başlık Conventional Commit formatında (squash merge)
+- `main`'e doğrudan push **yasak** — feature branch + PR
+
+## Veritabanı ve Prisma
+
+- Tablo: `snake_case` çoğul — `campaign_members`, `homebrew_items`
+- Migration adı: `kebab-case` — `add-campaign-setting-field`
+- Raw SQL yasak — Prisma Client only ([CODE-004])
+
+## Environment ve Prefix
+
+- Proje kodu: `dnd-companion` (repo, container, env prefix)
+- Env var: `SCREAMING_SNAKE` — `DATABASE_URL`, `JWT_ACCESS_SECRET`
+- Secret'lar koda veya log'a yazılmaz
+
+## UI Metin Örnekleri
+
+```tsx
+// ✓ Doğru
+<Button aria-label="Delete character">Delete</Button>
+toast.error('Failed to save campaign');
+
+// ✗ Yanlış
+<Button>Karakteri Sil</Button>
+```
+
+Sayfa `<title>` dinamik İngilizce: `"My Campaigns — DnD Companion"`.
+
+## WebSocket Event İsimlendirme
+
+Client ↔ server event adları **kebab-case** string; payload alanları camelCase (JSON):
+
+```typescript
+// ✓ Doğru
+socket.emit('join-campaign', { campaignId });
+socket.on('live-fields-updated', (payload) => { ... });
+
+// ✗ Yanlış
+socket.emit('joinCampaign', { campaign_id });
+```
+
+Tam event listesi → `docs/03_API_CONTRACTS.md` WebSocket bölümü.
+
+## JSON ve API Alanları
+
+- REST response: camelCase (`ownerId`, `emailVerifiedAt`, `createdAt`)
+- Query param: camelCase veya spec'teki ad (`cursor`, `limit`, `sort`)
+- Hata `error` kodu: `SCREAMING_SNAKE` — `LAST_ADMIN`, `EMAIL_NOT_VERIFIED`
+- Prisma `@map` ile DB snake_case; TS tarafında camelCase
+
+## Yorum ve Dokümantasyon
+
+- Kod yorumu kısa İngilizce — **ne** değil **neden** (iş kuralı gerekçesi)
+- JSDoc yalnızca public shared API veya karmaşık policy fonksiyonlarında
+- Türkçe yorum veya Türkçe commit mesajı **yasak**
+
+---
+
+Detay: `docs/00_PROJECT_OVERVIEW.md` Bölüm 9 (arayüz dili); `docs/03_API_CONTRACTS.md` Bölüm 2; `docs/09_DEV_WORKFLOW.md` Bölüm 5; `docs/mimari-kararlar.md` [P-008], [CODE-005]

@@ -1,0 +1,305 @@
+---
+description: RTK Query — baseApi, reauth, injectEndpoints, tag invalidation, cache patch. store/ ve API slice düzenlemelerinde.
+globs:
+  - "apps/web/src/store/**"
+  - "apps/web/src/hooks/useAuth.ts"
+  - "apps/web/src/hooks/usePagination.ts"
+---
+
+# DnD Companion — Frontend RTK Query
+
+Sunucu state tek katman: **RTK Query** (`@reduxjs/toolkit/query/react`). Axios, TanStack Query veya ham `fetch` (bootstrap refresh hariç) **yasak**.
+
+Auth memory → `20-frontend-general.mdc`; form mutation kullanımı → `22-frontend-forms.mdc`.
+
+## Store Yapısı
+
+```typescript
+// store/index.ts — ✓ Doğru
+export const store = configureStore({
+  reducer: {
+    auth: authReducer,
+    [baseApi.reducerPath]: baseApi.reducer,
+  },
+  middleware: (getDefaultMiddleware) =>
+    getDefaultMiddleware().concat(baseApi.middleware),
+});
+
+export type RootState = ReturnType<typeof store.getState>;
+export type AppDispatch = typeof store.dispatch;
+```
+
+Yalnızca `auth` slice + `baseApi` reducer — ekstra global slice ekleme (UI modal state local veya RHF).
+
+## baseApi ve Reauth
+
+```typescript
+// store/api/baseApi.ts — ✓ Doğru
+const baseQuery = fetchBaseQuery({
+  baseUrl: '/api/v1',
+  credentials: 'include', // refresh cookie
+  prepareHeaders: (headers, { getState }) => {
+    const token = (getState() as RootState).auth.accessToken;
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+    return headers;
+  },
+});
+
+const baseQueryWithReauth: BaseQueryFn = async (args, api, extraOptions) => {
+  let result = await baseQuery(args, api, extraOptions);
+  if (result.error?.status === 401) {
+    const refresh = await baseQuery(
+      { url: '/auth/refresh', method: 'POST' },
+      api,
+      extraOptions,
+    );
+    if (refresh.data) {
+      const { accessToken, user } = (refresh.data as ApiResponse<RefreshPayload>).data;
+      api.dispatch(setCredentials({ accessToken, user }));
+      result = await baseQuery(args, api, extraOptions);
+    } else {
+      api.dispatch(clearCredentials());
+    }
+  }
+  return result;
+};
+
+export const baseApi = createApi({
+  baseQuery: baseQueryWithReauth,
+  tagTypes: [/* aşağıda */],
+  endpoints: () => ({}),
+});
+```
+
+```typescript
+// ✗ Yanlış — token localStorage
+const token = localStorage.getItem('accessToken');
+
+// ✗ Yanlış — credentials omit (refresh çalışmaz)
+fetchBaseQuery({ baseUrl: '/api/v1' });
+```
+
+## Tag Types (Pin'li)
+
+`tagTypes` sabit liste — rastgele string tag **yasak**:
+
+`Campaign`, `CampaignList`, `Character`, `CharacterList`, `Homebrew`, `HomebrewList`, `MyCreations`, `Collection`, `DmNote`, `AdminUsers`, `AdminContent`, `User`
+
+Yeni kaynak tipi → tag ekle + bu rule güncelle + `docs/05` Bölüm 4.
+
+## injectEndpoints Pattern
+
+Her domain dosyası `baseApi.injectEndpoints` — ayrı `createApi` **yok**:
+
+```typescript
+// store/api/campaignsApi.ts — ✓ Doğru
+export const campaignsApi = baseApi.injectEndpoints({
+  endpoints: (builder) => ({
+    getCampaigns: builder.query<PaginatedResponse<CampaignListItem>, ListQuery>({
+      query: (params) => ({ url: '/campaigns', params }),
+      providesTags: ['CampaignList'],
+    }),
+    getCampaign: builder.query<Campaign, string>({
+      query: (id) => `/campaigns/${id}`,
+      providesTags: (result, error, id) => [{ type: 'Campaign', id }],
+    }),
+    createCampaign: builder.mutation<Campaign, CreateCampaignInput>({
+      query: (body) => ({ url: '/campaigns', method: 'POST', body }),
+      invalidatesTags: ['CampaignList'],
+    }),
+    updateCampaign: builder.mutation<Campaign, { id: string; body: UpdateCampaignInput }>({
+      query: ({ id, body }) => ({ url: `/campaigns/${id}`, method: 'PATCH', body }),
+      invalidatesTags: (_r, _e, { id }) => ['CampaignList', { type: 'Campaign', id }],
+    }),
+  }),
+});
+
+export const {
+  useGetCampaignsQuery,
+  useGetCampaignQuery,
+  useCreateCampaignMutation,
+} = campaignsApi;
+```
+
+API modül dosyaları: `authApi`, `campaignsApi`, `charactersApi`, `homebrewApi`, `collectionsApi`, `referenceApi`, `adminApi`, `uploadsApi`.
+
+## Tag Invalidation Matrisi (Özet)
+
+| Mutation | Invalidate |
+| --- | --- |
+| Campaign CUD | `CampaignList`, `Campaign:{id}` |
+| Campaign join/leave | `CampaignList`, `Campaign:{id}` |
+| Character CUD | `CharacterList`, `Character:{id}` |
+| Character live (REST) | `Character:{id}` veya optimistic |
+| Homebrew CUD/publish | `HomebrewList`, `MyCreations`, `Homebrew:{id}` |
+| Collection toggle | `Collection` |
+| DM Note CRUD | `DmNote:{campaignId}` |
+| Admin user actions | `AdminUsers`, `User` |
+
+Tam matris → `docs/05_FRONTEND_SPEC.md` Bölüm 4.
+
+## Response Envelope
+
+API `{ data }` veya liste `{ data, nextCursor, hasMore }`. RTK `transformResponse` gerekirse merkezi helper:
+
+```typescript
+// ✓ Doğru — tip güvenli unwrap
+transformResponse: (response: ApiResponse<Campaign>) => response.data,
+
+// ✗ Yanlış — envelope'ı UI'a sızdırma
+return response; // { data: { data: campaign } } double wrap riski
+```
+
+Hata: `FetchBaseQueryError` — `status`, `data.error` (SCREAMING_SNAKE), `data.message` (İngilizce toast).
+
+## Cursor Pagination
+
+Liste query'leri offset **kullanmaz** — `cursor`, `limit` (max 50):
+
+```typescript
+// ✓ Doğru
+getCampaigns: builder.query({
+  query: ({ cursor, limit = 20, search }) => ({
+    url: '/campaigns',
+    params: { cursor, limit, search },
+  }),
+}),
+
+// ✗ Yanlış
+params: { page: 2, offset: 20 }
+```
+
+`usePagination` hook: `fetchMore` + `nextCursor` birleştirme.
+
+## Cache Ayarları
+
+| Ayar | Değer |
+| --- | --- |
+| `keepUnusedDataFor` | default 60s; `reference/*` 300s |
+| `refetchOnReconnect` | true |
+| `refetchOnMountOrArgChange` | false (cache yeterli) |
+
+WS push ile güncellenen live fields → refetch yerine cache patch.
+
+## WebSocket Cache Patch
+
+```typescript
+// ✓ Doğru — server push → updateQueryData
+dispatch(
+  charactersApi.util.updateQueryData('getCharacter', characterId, (draft) => {
+    if (payload.fields) Object.assign(draft, payload.fields);
+    else draft[payload.field] = payload.value;
+  }),
+);
+
+// Member events → invalidate
+dispatch(campaignsApi.util.invalidateTags([{ type: 'Campaign', id: campaignId }]));
+```
+
+`useWebSocket` içinde; duplicate listener önlemek için cleanup zorunlu.
+
+## Auth API Slice
+
+| Endpoint | Not |
+| --- | --- |
+| `login` | `setCredentials` on success |
+| `logout` | `clearCredentials` + invalidate all veya resetApiState |
+| `register` | no auto-login (email verify) |
+| `refresh` | bootstrap + reauth wrapper |
+
+Login mutation `onQueryStarted` veya component'te dispatch `setCredentials`.
+
+### Logout ve Cache Temizliği
+
+```typescript
+// ✓ Doğru — logout sonrası
+dispatch(clearCredentials());
+dispatch(baseApi.util.resetApiState());
+disconnectSocket();
+
+// ✗ Yanlış — stale cache ile önceki kullanıcı verisi
+dispatch(clearCredentials()); // resetApiState unutuldu
+```
+
+## uploadsApi ve referenceApi
+
+`uploadsApi`: `getPresignedUrl` mutation — auth zorunlu; response `uploadUrl`, `publicUrl`. FE doğrudan S3 PUT; RTK sadece presign.
+
+`referenceApi`: public read — `providesTags` uzun TTL (`keepUnusedDataFor: 300`). Auth header opsiyonel.
+
+## Optimistic Updates (Sınırlı)
+
+Collection toggle, live field UI: optimistic `updateQueryData` + rollback `patchResult.undo()` on error. Character builder auto-save **optimistic değil** — debounced PATCH yeterli.
+
+```typescript
+// ✓ Doğru — toggle with undo
+const patch = dispatch(
+  collectionsApi.util.updateQueryData('getCollection', undefined, (draft) => {
+    draft.items.push(item);
+  }),
+);
+try {
+  await addToCollection(itemId).unwrap();
+} catch {
+  patch.undo();
+}
+```
+
+## Prefetch
+
+Liste kart hover: `usePrefetch('getCampaign', { id })` — opsiyonel optimizasyon. Idle prefetch post-MVP.
+
+## Hook Export Konvansiyonu
+
+RTK auto-hooks export et — wrapper hook yalnızca composition için:
+
+```typescript
+// ✓ Doğru
+export const { useGetCampaignQuery, useUpdateCampaignMutation } = campaignsApi;
+
+// ✗ Yanlış — useCampaignQuery custom fetch
+export function useCampaignQuery(id: string) {
+  return useEffect(() => { fetch(`/api/v1/campaigns/${id}`)... }, [id]);
+}
+```
+
+`useAuth` Redux selector — RTK Query değil.
+
+## Typed Dispatch/Selector
+
+```typescript
+export const useAppDispatch = () => useDispatch<AppDispatch>();
+export const useAppSelector: TypedUseSelectorHook<RootState> = useSelector;
+```
+
+## Test (Vitest + msw)
+
+RTK Query testleri msw handler + `setupApiStore` veya render with Provider. Mock access token memory'de `setCredentials` ile.
+
+## RTK Checklist
+
+```
+[ ] injectEndpoints (ayrı createApi yok)
+[ ] Tag provides/invalidates doğru
+[ ] credentials: 'include' + Bearer header
+[ ] 401 reauth → clearCredentials fallback
+[ ] Token localStorage yok
+[ ] Envelope unwrap
+[ ] Cursor pagination (offset yok)
+[ ] Endpoint path docs/03 ile uyumlu
+```
+
+## Anti-pattern'ler
+
+- ❌ `createApi` ikinci instance
+- ❌ `fetch` / axios paralel (refresh bootstrap hariç)
+- ❌ String tag typo (`'campaigns'` vs `'Campaign'`)
+- ❌ Mutation sonrası tag invalidate unutma
+- ❌ WS event sonrası gereksiz `refetch()` loop
+- ❌ `any` response type
+- ❌ Access token persist middleware
+- ❌ RTK Query cache'i localStorage'a sync
+
+---
+
+Detay: `docs/05_FRONTEND_SPEC.md` Bölüm 4–6, 8, 10, 14; `docs/03_API_CONTRACTS.md` Bölüm 1–2; `docs/07_SECURITY_IMPLEMENTATION.md` Bölüm 2–3

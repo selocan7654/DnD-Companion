@@ -1,0 +1,271 @@
+---
+description: Domain NestJS modülleri — campaigns, characters, homebrew, collections, reference, uploads. Kaynak service/controller düzenlemelerinde.
+globs:
+  - "apps/api/src/campaigns/**"
+  - "apps/api/src/characters/**"
+  - "apps/api/src/homebrew/**"
+  - "apps/api/src/collections/**"
+  - "apps/api/src/users/**"
+  - "apps/api/src/reference/**"
+  - "apps/api/src/uploads/**"
+  - "apps/api/src/email/**"
+---
+
+# DnD Companion — Backend Domain Modülleri
+
+Her kaynak tipi kendi NestJS modülünde ([CODE-003]). Alt feature'lar modül içi alt klasör — ayrı top-level modül değil.
+
+## Modül Haritası
+
+| Modül | Sorumluluk | Alt klasörler |
+| --- | --- | --- |
+| `campaigns/` | Campaign CRUD, invite, members, dm-notes | `members/`, `invite/`, `dm-notes/` |
+| `characters/` | Sheet CRUD, campaign assign, visibility, live fields REST | `dto/` |
+| `homebrew/` | 6 tip homebrew, draft/publish | `dto/` |
+| `collections/` | Kullanıcı koleksiyonu (published homebrew ref) | — |
+| `users/` | Profil read/update, self deactivate | `dto/` |
+| `reference/` | Resmi 5e read-only seed verisi | — |
+| `uploads/` | Presigned URL | `dto/` |
+| `email/` | Transactional email (auth akışları) | — |
+
+`auth/`, `admin/`, `websocket/`, `common/` → ilgili 11/12/16/17 kuralları.
+
+## Modül İç Yapı
+
+```
+<module>/
+  <module>.module.ts
+  <module>.controller.ts      # veya alt feature controller'ları
+  <module>.service.ts
+  dto/
+  <feature>/                   # opsiyonel
+    <feature>.controller.ts
+    <feature>.service.ts
+```
+
+```typescript
+// ✓ Doğru — campaigns alt feature ayrı controller, aynı modül
+@Module({
+  controllers: [CampaignsController, MembersController, InviteController, DmNotesController],
+  providers: [CampaignsService, MembersService, InviteService, DmNotesService],
+})
+export class CampaignsModule {}
+
+// ✗ Yanlış — invite logic'i campaigns.service.ts içinde 500 satır
+```
+
+Controller → Service tek yönlü; service'ler arası çapraz çağrı dikkatli (circular dependency → forwardRef veya shared helper).
+
+## Service Sorumluluğu Şablonu
+
+```typescript
+// ✓ Doğru — find → policy → mutate
+async update(id: string, user: AuthUser, dto: UpdateCampaignDto) {
+  const campaign = await this.prisma.campaign.findUnique({ where: { id } });
+  if (!campaign) throw new NotFoundException();
+  if (!CampaignPolicy.canUpdate(user, campaign)) {
+    throw new ForbiddenException({ error: 'FORBIDDEN', message: 'You do not have permission to update this campaign' });
+  }
+  return this.prisma.campaign.update({ where: { id }, data: dto });
+}
+
+// ✗ Yanlış — policy yok veya ADMIN bypass service'de unutulmuş
+async update(id: string, dto: UpdateCampaignDto) {
+  return this.prisma.campaign.update({ where: { id }, data: dto });
+}
+```
+
+Create: `ownerId` / `userId` her zaman `user.id` — client'tan kabul etme.
+
+## Campaign Domain
+
+- Private kaynak [AUTH-004]; liste yalnızca owner + member campaign'leri.
+- DM = `owner_id`; invite token regenerate/disable DM only.
+- `POST /invite/:token/join` — auth zorunlu; `campaign_members` insert.
+- DM notes: yalnızca campaign DM (service policy).
+- Member delete: DM only; DM kendini member'dan silemez (owner zaten DM).
+
+## Character Domain
+
+- Builder/sheet aynı entity [W-002] — status field yok.
+- `campaign_id` nullable, max bir campaign [AUTH-006].
+- Assign: user hedef campaign üyesi olmalı; önceki atama clear veya atomic swap.
+- `visibility`: `PUBLIC` | `PRIVATE`; toggle owner only.
+- Live fields REST: `PATCH /characters/:id/live` — DM veya owner; WS broadcast gateway üzerinden (16).
+
+## Homebrew Domain
+
+- `source`: `OFFICIAL` (seed, read-only user write) | `HOMEBREW`.
+- State: `DRAFT` → `PUBLISHED` / unpublish [W-003].
+- `data` JSONB: tip bazlı Zod (`packages/shared/schemas/homebrew/`).
+- Galeri `GET /homebrew`: yalnızca `PUBLISHED`; misafir okuyabilir.
+- Publish: `@RequireVerifiedEmail()` + owner policy.
+
+```typescript
+// ✓ Doğru — JSONB Zod validate
+const parsed = spellDataSchema.safeParse(dto.data);
+if (!parsed.success) {
+  throw new BadRequestException({
+    error: 'VALIDATION_FAILED',
+    message: 'Invalid data for this homebrew type',
+    details: parsed.error.issues.map((i) => ({
+      field: `data.${i.path.join('.')}`,
+      issue: i.message,
+    })),
+  });
+}
+
+// ✗ Yanlış — data'yı doğrulamadan JSONB'ye yazma
+data: dto.data as Prisma.InputJsonValue,
+```
+
+## Collections Domain
+
+- `collection_items` join: user ↔ homebrew_item.
+- Add/remove: verified user; homebrew `PUBLISHED` olmalı (unpublish sonrası ref kalır — UI rozeti FE).
+- Idempotent add → `409` veya silent success — spec'e uy (`docs/03` Bölüm 9).
+
+## Users Domain
+
+- `GET /users/me` — tam profil (email dahil).
+- `GET /users/:id` — başkası için `username` + `avatarUrl` only [PII].
+- `PATCH /users/me` — profil; email değişimi MVP dışı (varsa doc kontrol).
+- Self deactivate: `is_active=false`, refresh revoke.
+
+## Reference Domain
+
+- Tamamen read-only; tüm route `@Public()`.
+- Seed'ten gelen official homebrew/reference — user PATCH yok.
+- Cursor pagination + ILIKE search (`docs/03` Bölüm 11).
+
+## Uploads Domain
+
+- `POST /uploads/presign` — verified user.
+- MIME: png/jpeg/webp only; max 5 MB [D-005].
+- Magic-byte doğrulama service'de; SVG reddedilir.
+- Presigned URL; dosya doğrudan object storage'a — API body'den binary yok.
+
+## Email Domain
+
+- `EmailService` inject; auth service çağırır.
+- Template metinleri İngilizce.
+- SMTP cred env'den; log'da credential yok.
+
+## DTO Konvansiyonu
+
+Dosya adı: `create-*.dto.ts`, `update-*.dto.ts`, `assign-campaign.dto.ts`. `class-validator` decorator'ları; optional alanlar `@IsOptional()`.
+
+Liste endpoint'leri: `ListQueryDto` import (`common/dto/`).
+
+## Modüller Arası Bağımlılık
+
+| İzinli | Kaçın |
+| --- | --- |
+| `characters` → `campaigns` membership check (service) | `campaigns` → `characters` tight coupling |
+| Herhangi → `email/EmailService` | Domain → `admin/` |
+| `characters` → `websocket` gateway broadcast (live update) | Circular module imports |
+
+Websocket gateway export: `WebsocketModule` exports gateway; `CharactersService` inject edip `broadcastLiveUpdate` çağırır.
+
+## Response Serializer
+
+Entity → API camelCase Prisma default. Hassas alan strip: `password_hash` asla; `email` yalnızca owner/admin context.
+
+Liste response: `{ data, nextCursor, hasMore }`.
+
+## Invite Token Yönetimi [W-001]
+
+- `invite_token` nullable — disable = `NULL`
+- Regenerate: yeni crypto random token; eski link geçersiz
+- `GET /invite/:token` — public preview (auth yok); join auth zorunlu
+- `InvalidInviteTokenException` → 404
+
+```typescript
+// ✓ Doğru — join
+if (!campaign.inviteToken || campaign.inviteToken !== hashVerify(token)) {
+  throw new InvalidInviteTokenException();
+}
+if (await this.isMember(campaign.id, user.id)) {
+  throw new AlreadyMemberException();
+}
+```
+
+## DM Notes
+
+Yalnızca campaign DM CRUD. Player read yok (campaign private zaten — üye read campaign context'inde). Reorder endpoint: `PATCH .../reorder` — sıra array validate.
+
+## Live Fields REST → WS Köprüsü
+
+`CharactersService.updateLiveFields`:
+1. Policy: owner veya campaign DM
+2. Prisma update allowed fields only (`hitPointsCurrent`, `temporaryHitPoints`, `conditions`, `deathSaves`)
+3. `websocketGateway.broadcastLiveUpdate(campaignId, payload)`
+
+REST persist; WS notify — WS tek başına kaynak değil.
+
+## Homebrew Tipleri
+
+6 alt tip: SPELL, MONSTER, FEAT, BACKGROUND, MAGIC_ITEM, SUBCLASS — `type` enum + ilgili Zod schema. `source`: OFFICIAL (seed) | HOMEBREW.
+
+Publish: `status = PUBLISHED`, `publishedAt = now()`. Unpublish: galeriden düşer; collection ref kalır.
+
+## Collection İş Kuralları
+
+- Add: homebrew `PUBLISHED` olmalı
+- Duplicate add → `409` `ALREADY_IN_COLLECTION`
+- Remove: idempotent veya 404 — spec'e uy
+
+## Reference Read-Only
+
+Seed JSON → `prisma/seed-data/`. API salt read; filtre `search`, `source`, cursor. Classes/races shared constants ile uyumlu (`packages/shared`).
+
+## Upload Presign Akışı
+
+1. Client `POST /uploads/presign` { contentType, fileSize }
+2. Service validate MIME + size
+3. Presigned PUT URL + `publicUrl` döner
+4. Client storage'a PUT
+5. Client ilgili entity'yi `bannerUrl` / `avatarUrl` PATCH
+
+Sunucu binary upload yok (MVP).
+
+## Email Service Kullanımı
+
+`EmailService.sendVerificationEmail`, `sendPasswordResetEmail` — template İngilizce. AuthService çağırır; domain modülleri email modülüne doğrudan bağlanmaz (auth hariç).
+
+## Domain Event / Side Effect Özeti
+
+| Olay | Yan etki |
+| --- | --- |
+| Campaign member join | WS `campaign:member-joined` |
+| Member remove | WS `campaign:member-left` |
+| User deactivate | refresh revoke |
+| Admin deactivate | + audit (17) |
+| Character live update | WS `character:live-update` |
+
+## Anti-pattern'ler
+
+- ❌ Repository katmanı ekleme
+- ❌ `ownerId`'yi request body'den alma
+- ❌ Official/seed içeriğe user write endpoint
+- ❌ Homebrew `data` için class-validator ile derin JSON validate
+- ❌ Campaign'i public listeleme
+- ❌ Character'ı campaign üyeliği olmadan cross-campaign assign
+- ❌ Collection'a DRAFT homebrew ekleme (business rule ihlali)
+- ❌ Reference modülüne write endpoint
+- ❌ Upload'da SVG veya sunucu taraflı buffer upload (MVP presign only)
+- ❌ Live field update'te WS broadcast unutma
+- ❌ Invite token plain DB'de saklama
+- ❌ DM notes'a player write endpoint
+
+## Circular Dependency Önleme
+
+`CampaignsService` ↔ `CharactersService` — membership check için prisma direct veya shared helper; modül circular import'tan kaçın.
+
+## Official Homebrew Immutability (User Path)
+
+`source === OFFICIAL` → user `homebrew.service` write metodları erken `403`. Admin path ayrı.
+
+---
+
+Detay: `docs/04_BACKEND_SPEC.md` Bölüm 1–2, 7, 10–11; `docs/01_DOMAIN_MODEL.md`; `docs/03_API_CONTRACTS.md` Bölüm 5–11, 13; `docs/mimari-kararlar.md` [CODE-003], [AUTH-004]–[AUTH-007], [W-001]–[W-004]

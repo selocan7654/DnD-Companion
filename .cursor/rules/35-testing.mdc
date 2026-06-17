@@ -1,0 +1,227 @@
+---
+description: Jest/Vitest test yazımı, auth matrisi, factory, coverage eşikleri — test ve config dosyaları düzenlenirken.
+globs:
+  - "**/*.{test,spec}.{ts,tsx}"
+  - "**/test/**"
+  - "**/jest.config.{ts,js,mjs,cjs}"
+  - "**/vitest.config.{ts,js,mjs}"
+---
+
+# DnD Companion — Testing
+
+Test stratejisi **odaklı ve pragmatik**: hata maliyeti yüksek katmanlara öncelik. Genel coverage hard gate yok; **yetkilendirme ve auth** zorunlu kapsam. `04-quality-gates.mdc` özet kapıları tekrarlar — bu kural test **yazımı** ve **matris** disiplinini tanımlar.
+
+## Test Piramidi (Öncelik)
+
+| Sıra | Katman | Araç | Ne test edilir |
+| --- | --- | --- | --- |
+| 1 | BE integration | Jest + supertest + gerçek Postgres | HTTP → guard → policy → DB |
+| 2 | BE unit | Jest + Prisma mock | Policy dalları, service iş mantığı |
+| 3 | FE component | Vitest + Testing Library + msw | Form validation, auth guard, koşullu render |
+
+Yetkilendirme hatası UI bug'ından maliyetli — yeni endpoint'te integration + matris önce.
+
+## Backend: Dosya Konumu ve İsimlendirme
+
+| Tür | Konum / pattern | Araç |
+| --- | --- | --- |
+| Unit | `src/**/*.service.spec.ts`, `common/policies/*.policy.spec.ts` | Mock Prisma |
+| Integration | `src/**/*.controller.spec.ts` | supertest + gerçek DB |
+| Auth matrisi | `src/**/*.auth.spec.ts` | supertest; matris hücresi = `it()` |
+
+```typescript
+// ✓ Doğru — yetki testi ayrı dosya, açıklayıcı isim
+// campaigns/campaigns.auth.spec.ts
+describe('DELETE /campaigns/:id', () => {
+  it('403 — member cannot delete campaign', async () => { /* ... */ });
+  it('404 — otherUser cannot read campaign (existence hidden)', async () => { /* ... */ });
+});
+
+// ✗ Yanlış — matris eksik veya tek happy-path
+it('deletes campaign', async () => { /* sadece owner */ });
+```
+
+Integration testler `*.spec.ts` uzantısı paylaşır; `*.auth.spec.ts` PR review'da hızlı tanınır.
+
+## Yetkilendirme Test Matrisi (Zorunlu)
+
+`[AUTH-007]` / `[TEST-002]`: guard veya policy içeren endpoint değişikliği → ilgili matris kombinasyonları **aynı PR'da** integration test olarak. Matris olmadan merge **edilemez**.
+
+### Aktörler (her matris satırı)
+
+| Aktör | Tanım |
+| --- | --- |
+| `ADMIN` | `role = ADMIN` |
+| `owner` | Kaynak sahibi (DM, karakter sahibi, homebrew sahibi) |
+| `member` | Campaign üyesi, sahip değil |
+| `otherUser` | İlişkisiz doğrulanmış kullanıcı |
+| `unverified` | `email_verified_at = NULL` |
+| `deactivated` | `is_active = false` |
+| `guest` | Token yok |
+
+Tam endpoint × aktör tabloları → `docs/08_TESTING_STRATEGY.md` Bölüm 5. Rule'da kopyalama.
+
+### HTTP Beklentileri (özet)
+
+| Durum | Ne zaman |
+| --- | --- |
+| `401` | guest, deactivated |
+| `403` | yetkisiz doğrulanmış / unverified yazma |
+| `404` | yetkisiz kaynak okuma (varlık gizleme — campaign private) |
+| `200`/`201` | izinli aktör |
+
+```typescript
+// ✓ Doğru — yetkisiz campaign read → 404 (existence leak yok)
+expect(res.status).toBe(404);
+
+// ✗ Yanlış — outsider'a 403 (kaynak varlığı ifşası)
+expect(res.status).toBe(403);
+```
+
+Yeni kaynak tipi endpoint'i → `docs/08` Bölüm 5'e matris satırı ekle (doc PR veya aynı PR).
+
+## Integration Test Lifecycle
+
+Gerçek PostgreSQL; mock DB yok.
+
+```typescript
+// test/setup.ts — özet pattern
+beforeAll(async () => {
+  execSync('npx prisma migrate deploy', { env: { ...process.env, DATABASE_URL } });
+});
+
+afterEach(async () => {
+  // FK sırasına göre truncate — testler izole
+  await prisma.$transaction([/* deleteMany chain */]);
+});
+```
+
+- CI: `migrate deploy` job adımında (30-infrastructure)
+- Her test kendi verisini factory ile oluşturur
+- Auth helper: `loginAsUser(app, email, password)` → `authHeader(token)` (`docs/08` Bölüm 4)
+
+## Test Data Factory
+
+Elle fixture yazma yerine `apps/api/test/factories/`:
+
+- `createTestUser(prisma, overrides?)`
+- `createTestCampaign(prisma, ownerId, overrides?)`
+- `createTestCharacter(prisma, ownerId, overrides?)`
+- `createTestHomebrew(prisma, ownerId, overrides?)`
+
+Deterministik varsayılanlar; `counter++` ile unique email/username. Şifre: `argon2` hash, varsayılan `Test1234`.
+
+```typescript
+// ✓ Doğru — factory + ilişki
+const dm = await createTestUser(prisma, { emailVerifiedAt: new Date() });
+const campaign = await createTestCampaign(prisma, dm.id);
+await prisma.campaignMember.create({ data: { campaignId: campaign.id, userId: player.id } });
+
+// ✗ Yanlış — her testte 40 satır inline prisma.create
+```
+
+## Backend Unit Testleri
+
+**Policy** (`common/policies/`): her `can*` fonksiyonunun tüm dalları — ADMIN bypass, owner, member, outsider.
+
+**Service**: Prisma `jest-mock-extended` (`createMockPrisma()`). Email, S3 dış servis mock.
+
+```typescript
+// ✓ Doğru — policy branch coverage
+describe('canUpdate', () => {
+  it('only owner can update', () => {
+    expect(CampaignPolicy.canUpdate(owner, campaign)).toBe(true);
+    expect(CampaignPolicy.canUpdate(member, campaign)).toBe(false);
+  });
+});
+```
+
+## Coverage Eşikleri (Hard Gate — İstisna)
+
+Genel repo minimumu **yok**. Aşağıdaki path'ler `jest.config.ts` `coverageThreshold` ile CI'da kırar:
+
+| Path | Branch hedefi |
+| --- | --- |
+| `src/common/policies/` | **%100** |
+| `src/common/guards/` | **%100** |
+| `src/auth/` | ≥ **%95** (branch/functions/lines) |
+
+Yeni policy, guard veya auth akışı → test **aynı PR'da**. Threshold düşürme yasak.
+
+```json
+// apps/api/jest.config.ts — özet
+"coverageThreshold": {
+  "./src/common/policies/": { "branches": 100, "functions": 100, "lines": 100 },
+  "./src/common/guards/": { "branches": 100, "functions": 100, "lines": 100 },
+  "./src/auth/": { "branches": 95, "functions": 95, "lines": 95 }
+}
+```
+
+Diğer modüller: reviewer kritik iş mantığının test edildiğini doğrular — düşük değerli coverage şişirme yok.
+
+## Frontend Testleri
+
+**Vitest** + `@testing-library/react` + `user-event`. API mock: **msw** (RTK Query cache/invalidation doğal test).
+
+| Öncelikli alan | Davranış |
+| --- | --- |
+| Auth formları | Zod validation, genel hata mesajı (enumeration yok) |
+| `ProtectedRoute` | Unauthenticated → login redirect |
+| Koşullu UI | DM-only buton gizli; unverified disabled |
+| Form state | Character builder tab geçişi |
+
+```typescript
+// ✓ Doğru — erişilebilir sorgu + davranış
+expect(screen.getByRole('button', { name: /edit/i })).toBeInTheDocument();
+expect(screen.queryByRole('button', { name: /edit/i })).not.toBeInTheDocument();
+
+// ✗ Yanlış — implementation detail
+expect(wrapper.find('.edit-btn').length).toBe(1);
+```
+
+`vitest.config.ts`: `environment: 'jsdom'`, `css: false`, `setupFiles` → msw server listen/reset.
+
+## CI Test Gate (Özet)
+
+PR merge için test job'ları geçmeli — sıra `30-infrastructure` ve `04-quality-gates` ile uyumlu:
+
+1. `lint` + `typecheck`
+2. `test-backend` (`--ci --coverage`)
+3. `test-frontend` (`--ci --coverage`)
+4. `security` audit
+5. `build`
+
+Yetki değişikliği PR checklist: matris `*.auth.spec.ts` güncel mi?
+
+## PR / Agent Kuralları
+
+- Agent test eklemeden yetki kuralı commit etmez
+- Agent `main` merge etmez — insan review + CI (`docs/10` Bölüm 9)
+- Faz sonu: o faza ait matris kombinasyonları tam kapsanmış olmalı
+
+## Test Yazım Checklist
+
+```
+[ ] Yetki/policy değişti → *.auth.spec.ts matris hücreleri
+[ ] Integration: gerçek DB, afterEach truncate, factory kullanımı
+[ ] policies/guards/auth coverage threshold karşılandı
+[ ] Yetkisiz read: 404 (campaign) — 403 değil (varlık leak)
+[ ] FE: Testing Library + msw; validation mesajları İngilizce assert
+[ ] Hassas veri assert/log yok (password, token)
+[ ] docs/08 matrisi ile uyum (yeni endpoint → doc güncelle)
+```
+
+## Anti-pattern'ler
+
+- ❌ Guard/policy değişikliği testsiz PR
+- ❌ Integration testte mock Prisma (gerçek DB gerekli)
+- ❌ Matrisin tek aktörle "smoke test" sayılması
+- ❌ `coverageThreshold` gevşetme veya exclude hack
+- ❌ `localStorage` token ile auth test (memory + Bearer pattern)
+- ❌ Türkçe assertion mesajı veya UI string testi
+- ❌ Testler arası paylaşılan mutable global state (truncate sonrası izole)
+- ❌ `*.auth.spec.ts` yerine dağınık tek `it` — review'da matris kaçırılır
+
+---
+
+Detay: `docs/08_TESTING_STRATEGY.md` Bölüm 1–9; `docs/09_DEV_WORKFLOW.md` Bölüm 6–7; `docs/10_IMPLEMENTATION_ROADMAP.md` Bölüm 9; `docs/mimari-kararlar.md` [TEST-002], [AUTH-007]

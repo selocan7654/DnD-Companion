@@ -1,0 +1,236 @@
+---
+description: Step-by-step procedure for Prisma schema changes and migrations (migrate dev, seed check, rollback). Use when altering apps/api/prisma/schema.prisma, adding tables/columns, or creating migration files.
+---
+
+# Add Prisma Migration — Procedure
+
+Prisma Migrate only — **no raw SQL** in application code ([CODE-004]). Schema truth: `docs/02_DATABASE_SCHEMA.md`; conventions → `15-backend-database-prisma.mdc`.
+
+## Step 0: Preconditions
+
+- [ ] Entity/column design matches `docs/02_DATABASE_SCHEMA.md` and `docs/01_DOMAIN_MODEL.md`.
+- [ ] Enum values align with `packages/shared` (`Role`, `HomebrewStatus`, etc.).
+- [ ] Breaking change assessed — production data impact noted in PR.
+- [ ] Docker Postgres running: `docker compose up -d` (`docs/09` Bölüm 2).
+
+Load: `docs/02_DATABASE_SCHEMA.md`, `docs/09_DEV_WORKFLOW.md` Bölüm 8, `docs/01_DOMAIN_MODEL.md` (if new entity).
+
+## Step 1: Edit schema.prisma
+
+Path: `apps/api/prisma/schema.prisma`.
+
+Naming rules:
+
+| Layer | Convention | Example |
+| --- | --- | --- |
+| PostgreSQL table | `snake_case` plural | `campaign_members` |
+| Prisma model | `PascalCase` | `CampaignMember` |
+| TS field | `camelCase` | `ownerId` |
+| Mapping | `@@map`, `@map` | `@map("owner_id")` |
+
+```prisma
+model Campaign {
+  id          String   @id @default(uuid())
+  ownerId     String   @map("owner_id")
+  name        String
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  owner       User     @relation(fields: [ownerId], references: [id])
+  members     CampaignMember[]
+
+  @@map("campaigns")
+}
+```
+
+Checklist:
+
+```
+[ ] UUID PK @default(uuid()) unless composite PK (members, collection_items)
+[ ] created_at on every table; updated_at on mutable tables
+[ ] FK onDelete matches docs/02 Bölüm 4 cascade table
+[ ] Indexes for owner_id, campaign_id, foreign keys used in policy queries
+[ ] JSONB fields documented in domain model (no DB-level JSON schema)
+```
+
+## Step 2: Create and Apply Migration (Local)
+
+```bash
+pnpm --filter api prisma migrate dev --name <kebab-case-description>
+```
+
+Examples (`docs/09` Bölüm 8):
+
+```bash
+pnpm --filter api prisma migrate dev --name add-campaign-setting-field
+pnpm --filter api prisma migrate dev --name create-dm-notes-table
+```
+
+`migrate dev`:
+
+1. Generates SQL under `apps/api/prisma/migrations/<timestamp>_<name>/`
+2. Applies to local DB
+3. Regenerates Prisma Client
+
+**Review generated SQL** before commit — unexpected drops or locks.
+
+## Step 3: Update Domain Docs (if new entity)
+
+If migration introduces new tables or meaningful columns:
+
+- [ ] `docs/02_DATABASE_SCHEMA.md` — table definition
+- [ ] `docs/01_DOMAIN_MODEL.md` — entity rules, state machine
+- [ ] `docs/03_API_CONTRACTS.md` — if endpoints expose new fields
+
+Same PR as migration when possible.
+
+## Step 4: Seed Compatibility
+
+```bash
+pnpm --filter api prisma db seed
+```
+
+Seed path: `apps/api/prisma/seed.ts` (`docs/09` Bölüm 9).
+
+```
+[ ] Seed runs without error after migration
+[ ] New NOT NULL columns have default or seed populates them
+[ ] Official 5e reference seed still loads
+[ ] Admin seed account still created
+```
+
+If seed breaks → fix seed in **same PR**.
+
+## Step 5: Application Code Updates
+
+After client regenerate:
+
+1. Update services/DTOs/types using new fields.
+2. Add factories in `apps/api/test/factories/` for new models.
+3. Update `afterEach` truncate order if new FK tables (`docs/08` Bölüm 4.2).
+
+## Step 6: Enum Changes
+
+PostgreSQL native enums via Prisma — adding values needs careful migration:
+
+```bash
+pnpm --filter api prisma migrate dev --name add-homebrew-status-value
+```
+
+Verify SQL uses `ALTER TYPE ... ADD VALUE`. Coordinate with `packages/shared` enum.
+
+## Step 7: Integration Test DB
+
+Test setup runs `prisma migrate deploy` against `TEST_DATABASE_URL`:
+
+```bash
+pnpm --filter api test -- --ci
+```
+
+Fresh clone sanity:
+
+```bash
+docker compose down -v && docker compose up -d
+pnpm --filter api prisma migrate dev
+pnpm --filter api prisma db seed
+```
+
+## Step 8: Staging / Production Apply
+
+**Never** `migrate dev` in production.
+
+```bash
+pnpm --filter api prisma migrate deploy
+```
+
+CI/CD deploy step runs `migrate deploy` only (`docs/09` Bölüm 8).
+
+## Step 9: Rollback Strategy
+
+Prisma has **no automatic down migration**.
+
+| Scenario | Action |
+| --- | --- |
+| Migration not yet merged | delete migration folder, reset local DB, recreate |
+| Already deployed | new forward migration `revert-<name>` reversing change |
+| Failed mid-apply | `prisma migrate resolve --rolled-back <name>` then fix |
+
+Critical data risk → PITR ([INF-OPEN-3] — human decision, no agent assumption).
+
+## Step 10: PR Requirements
+
+Per `docs/09` Bölüm 8:
+
+```
+[ ] Migration SQL committed under prisma/migrations/
+[ ] PR describes tables/columns added/changed/removed
+[ ] Prefer migration-only PR when large schema change
+[ ] seed verified
+[ ] docs/02 updated if schema doc drifted
+```
+
+Commit message example:
+
+```
+feat(db): add dm_notes table with sort_order column
+```
+
+## Anti-patterns
+
+- ❌ `$executeRaw` / string-concat SQL for normal CRUD
+- ❌ Manual DB edits without migration file
+- ❌ camelCase column names in PostgreSQL
+- ❌ Migration bundled with unrelated feature without justification
+- ❌ Skipping seed verification
+
+## When to Split PRs
+
+| Case | Recommendation |
+| --- | --- |
+| Large schema + feature | Migration PR first, feature PR second |
+| Small additive column + endpoint | Same PR acceptable |
+| Data backfill needed | Separate script or migration step with comment |
+
+## Composite Primary Keys
+
+Junction tables (`campaign_members`, `collection_items`) use `@@id([...])` per `docs/02_DATABASE_SCHEMA.md`. Factories must supply both key parts.
+
+## JSONB Columns
+
+`Character.abilityScores`, `HomebrewItem.data`, `AuditLog.metadata` — no DB check constraint. Application validates on write; migration only adds column type `Json`.
+
+## Nullable vs Required Rollout
+
+Safe pattern for NOT NULL on existing table:
+
+1. Migration: add nullable column.
+2. Backfill in seed or data migration step.
+3. Second migration: `SET NOT NULL`.
+
+Single PR only if table is new/empty.
+
+## CI Migration Path
+
+CI test job runs `migrate deploy` against test DB — committed SQL must apply cleanly on empty DB. Avoid destructive renames without data migration SQL in same file.
+
+## Troubleshooting
+
+| Error | Fix |
+| --- | --- |
+| P3006 migration failed | `migrate resolve`; fix SQL; new migration |
+| Drift detected | `prisma migrate diff` — do not `db push` in shared env |
+| Seed FK violation | truncate order or create parent entities first |
+| Enum value missing in TS | sync `packages/shared` + regenerate client |
+
+## Post-Migration Code Touch List
+
+```
+[ ] apps/api/src/**/*.service.ts — new fields
+[ ] packages/shared — types/Zod
+[ ] test/factories/*.ts
+[ ] docs/02 — column list
+[ ] apps/web — only if UI displays field (separate FE PR ok)
+```
+
+---
+
+Detay: `docs/02_DATABASE_SCHEMA.md`; `docs/09_DEV_WORKFLOW.md` Bölüm 8–9; `docs/01_DOMAIN_MODEL.md`; `docs/08_TESTING_STRATEGY.md` Bölüm 4.2

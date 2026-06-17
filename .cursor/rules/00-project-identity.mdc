@@ -1,0 +1,151 @@
+---
+alwaysApply: true
+---
+
+# DnD Companion — Proje Kimliği
+
+**DnD Companion Platform** (`dnd-companion`), D&D 5e için ücretsiz, açık kaynaklı bir kampanya ve karakter yönetim web uygulamasıdır. D&D Beyond campaign/character/homebrew akışları ile 5e.tools DM Screen konseptini birleştirir. Hobi/topluluk projesidir — monetizasyon yoktur.
+
+Agent bu projede **mimari karar vermez**; `docs/` ve `docs/mimari-kararlar.md` tek doğruluk kaynağıdır. Çelişki olursa **docs kazanır**, rule güncellenir.
+
+## Tech Stack (Pin'li)
+
+| Katman | Teknoloji |
+| --- | --- |
+| Dil | TypeScript (uçtan uca) |
+| Monorepo | pnpm workspaces |
+| Backend | NestJS + Prisma + PostgreSQL |
+| Cache / rate limit / WS adapter | Redis |
+| Real-time | Socket.io (NestJS Gateway) |
+| Frontend | React + Vite + React Router |
+| State | Redux Toolkit + RTK Query |
+| UI | Tailwind CSS + shadcn/ui |
+| Forms | RHF + Zod (FE), class-validator (BE) |
+| Auth | Passport JWT + Argon2id |
+| API | REST (`/api/v1`) |
+| Hata izleme | Sentry (ücretsiz tier) |
+
+Yeni framework veya major kütüphane → ADR (`docs/mimari-kararlar.md` güncelle + `45-write-adr` how-to).
+
+## Monorepo Yapısı
+
+```
+apps/
+  api/          # NestJS backend
+  web/          # React + Vite frontend
+packages/
+  shared/       # Ortak tipler, enum'lar, Zod şemaları, izin sabitleri
+```
+
+- FE build (`apps/web/dist`) NestJS tarafından statik serve edilir — ayrı Vercel/Netlify yok.
+- Lokal altyapı: Docker Compose (PostgreSQL 16 + Redis 7); API/FE host'ta hot-reload.
+- Ortamlar: `development` | `staging` | `production` — secret'lar env var; `.env` commit edilmez.
+
+## Erişim Katmanları
+
+| Katman | Kim | Özet |
+| --- | --- | --- |
+| Misafir | Anonim veya `email_verified_at = NULL` | Resmi 5e referans + published homebrew galeri (read-only) |
+| Doğrulanmış USER | `email_verified_at` set | Campaign, character, homebrew, koleksiyon CRUD |
+| ADMIN | `role = ADMIN` | Tüm içerik; sahiplik bypass (admin panel) |
+
+**Kritik:** Campaign tamamen private — yalnızca DM (`owner_id`) ve `campaign_members`. DM/Player **sistem rolü değil**; kampanya ilişkisinden doğan bağlamsal konum.
+
+## Domain Terminolojisi
+
+| Terim | Anlam |
+| --- | --- |
+| Campaign | DM'in oluşturduğu özel oyun grubu |
+| Character | D&D 5e karakter sheet'i; opsiyonel campaign ataması |
+| HomebrewItem | Resmi 5e verisi veya kullanıcı homebrew'i (`source` ile ayrışır) |
+| DM Screen | Canlı alanlar (HP, conditions, death saves) + DM notları |
+| Live Fields | WebSocket ile anlık güncellenen karakter alanları |
+| Collection | Kullanıcının beğendiği published homebrew listesi |
+| Invite Link | Token tabanlı, yenilenebilir kampanya davet URL'si |
+| Official Content | Seed ile yüklenen read-only 5e referans verisi |
+
+Entity detayı, state machine ve iş kuralları → `docs/01_DOMAIN_MODEL.md`.
+
+## Personalar (Bağlamsal — Sistem Rolü Değil)
+
+| Persona | Nasıl oluşur | Tipik eylemler |
+| --- | --- | --- |
+| Dungeon Master | `Campaign.owner_id == user.id` | Campaign CRUD, davet, DM Screen, notlar |
+| Player | `campaign_members` kaydı | Katılma, karakter oluşturma/atama, sheet düzenleme |
+
+Sistem rolleri yalnızca `ADMIN` ve `USER` ([R-001]). Aynı kullanıcı bir campaign'de DM, başka birinde Player olabilir.
+
+## Görünürlük İlkeleri (Özet)
+
+| Kaynak | Read kuralı (özet) |
+| --- | --- |
+| Campaign | Tamamen private — DM + üyeler; dışarıdan 404 |
+| Character | `PUBLIC` **veya** campaign üyeliği **veya** sahip |
+| Homebrew | `DRAFT` = sahip only; `PUBLISHED` = galeri (misafir dahil) |
+
+Yazma yetkisi sahiplik/ilişki matrisine tabidir ([AUTH-007]). Tam geçiş tablosu spec'te.
+
+## Backend Modül Haritası
+
+```
+apps/api/src/
+  auth/  users/  campaigns/  characters/  homebrew/
+  collections/  reference/  admin/  uploads/
+  common/   # guards, policies, filters, decorators
+```
+
+Her kaynak tipi kendi NestJS modülünde; policy fonksiyonları `common/policies/`. Modül ağacı ve pipeline → `docs/04_BACKEND_SPEC.md` Bölüm 1.
+
+## MVP Kapsamı (Özet)
+
+Tek fazda teslim: auth, campaign CRUD + davet, character builder, DM Screen (WS), homebrew (6 alt tip) + galeri, koleksiyon, resmi 5e referans, admin panel, CI pipeline.
+
+## MVP Dışı — Kod Üretme
+
+- Native mobil, monetizasyon, çoklu dil (UI **yalnızca İngilizce**)
+- MFA, in-app bildirim, task/ticket sistemi, HaveIBeenPwned
+- Hard delete / right to erasure, audit log admin UI, chain-hash tamper-evidence
+- Dice roller, initiative/combat tracker, full-text search (ILIKE yeterli)
+- Sunucu taraflı image pipeline, E2E (Playwright)
+- Deployment platformu seçilmeden prod deploy ([INF-OPEN-1])
+
+## Ölçek ve Mimari İlkeler
+
+- Hedef: 10.000+ kayıtlı kullanıcı; yatay ölçeklenebilir (stateless JWT API, Redis WS adapter).
+- Real-time kapsamı dar: yalnızca DM Screen live fields.
+- Güvenlik hedefi: OWASP ASVS L1.
+
+## Docs İndeksi (Agent)
+
+| Dosya | Ne zaman oku |
+| --- | --- |
+| `00_PROJECT_OVERVIEW` | Bağlam, MVP sınırları |
+| `01_DOMAIN_MODEL` | Entity, iş kuralı, state machine |
+| `02_DATABASE_SCHEMA` | Prisma şema, migration |
+| `03_API_CONTRACTS` | Endpoint, hata envelope, WS event |
+| `04_BACKEND_SPEC` | NestJS modül, guard, filter |
+| `05_FRONTEND_SPEC` | Route, state, form, a11y |
+| `06_SCREEN_CATALOG` | Ekran ID (`S-*`), UX state |
+| `07_SECURITY_IMPLEMENTATION` | Auth akışı, token, rate limit |
+| `08_TESTING_STRATEGY` | Test piramidi, coverage |
+| `09_DEV_WORKFLOW` | Git, CI, seed, lokal kurulum |
+| `10_IMPLEMENTATION_ROADMAP` | Faz sırası, oturum planı |
+| `mimari-kararlar.md` | Pin'li karar ID'leri |
+
+Glob/how-to/phase rule'lar ilgili dosya yolunda yüklenir — `.cursor/rules/` altındaki tüm `.mdc` setini her oturumda okuma.
+
+## Agent Yasakları (Özet)
+
+Tam liste `01-coding-philosophy.mdc` ve `03-security-baseline.mdc`'de ([CODE-004] + roadmap §1):
+
+- Raw SQL / string concatenation → yalnızca Prisma Client
+- Access token localStorage/sessionStorage'da değil
+- Guard'sız yazma endpoint'i yok
+- `password_hash` response'ta yok; `email` yalnızca sahip veya ADMIN
+- SVG upload yok; yetki kuralı testsiz merge yok
+- `main`'e doğrudan push yok; production deploy / faz geçişi onaysız yok
+- Bölüm 18 açık kararlarında varsayım yok
+
+---
+
+Detay: `docs/00_PROJECT_OVERVIEW.md`; `docs/mimari-kararlar.md` Bölüm 1, 14–17, 18

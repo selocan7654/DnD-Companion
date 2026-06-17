@@ -1,0 +1,308 @@
+---
+description: Admin modülü — RolesGuard, son admin koruması, audit log INSERT-only, content bypass. apps/api/src/admin düzenlemelerinde.
+globs:
+  - "apps/api/src/admin/**"
+  - "apps/api/src/common/guards/roles.guard.ts"
+---
+
+# DnD Companion — Backend Admin & Audit
+
+Admin işlemleri `admin/` modülünde; tüm route'lar `role = ADMIN` [R-001], [AUTH-008]. Normal kullanıcı CRUD auditlenmez — yalnızca admin eylemleri [SEC audit scope].
+
+Policy: ADMIN bypass `common/policies` ilk adımda; admin service'ler görünürlük/üyelik filtrelerini atlayabilir.
+
+## Modül Yapısı
+
+```
+admin/
+  admin.module.ts
+  admin.service.ts
+  admin-users.controller.ts      # /admin/users
+  admin-content.controller.ts    # /admin/campaigns|characters|homebrew
+  audit-log.service.ts           # append-only writer
+  dto/
+    change-role.dto.ts
+```
+
+```typescript
+// ✓ Doğru — controller class-level admin
+@Controller('admin/users')
+@Roles(Role.ADMIN)
+export class AdminUsersController {
+  constructor(
+    private readonly adminService: AdminService,
+  ) {}
+}
+
+// ✗ Yanlış — admin kontrolü service if'i ile
+@Patch(':id/role')
+async changeRole(@CurrentUser() user, @Body() dto) {
+  if (user.role !== 'ADMIN') throw new ForbiddenException();
+}
+```
+
+`RolesGuard` global `APP_GUARD` — `@Roles(Role.ADMIN)` metadata zorunlu.
+
+## Admin Endpoint Grupları
+
+Kullanıcı yönetimi (`docs/03` Bölüm 12):
+- `GET /admin/users` — tam user (email dahil)
+- `PATCH /admin/users/:id/role`
+- `POST /admin/users/:id/deactivate` | `reactivate`
+
+İçerik yönetimi — visibility/üyelik/status bypass:
+- Campaigns, Characters, Homebrew list/detail/PATCH/DELETE
+- `PATCH /admin/homebrew/:id/status` — publish/unpublish
+
+Response envelope standart `{ data }`; liste cursor pagination.
+
+## Son Admin Koruması [R-003]
+
+```typescript
+// ✓ Doğru — role change service
+async changeRole(actorId: string, targetId: string, dto: ChangeRoleDto) {
+  const target = await this.prisma.user.findUnique({ where: { id: targetId } });
+  if (!target) throw new NotFoundException();
+
+  if (target.role === Role.ADMIN && dto.role === Role.USER) {
+    const adminCount = await this.prisma.user.count({
+      where: { role: Role.ADMIN, isActive: true },
+    });
+    if (adminCount <= 1) {
+      throw new UnprocessableEntityException({
+        error: 'LAST_ADMIN',
+        message: 'Cannot remove the last admin from the system',
+      });
+    }
+  }
+
+  const updated = await this.prisma.user.update({
+    where: { id: targetId },
+    data: { role: dto.role },
+  });
+
+  await this.auditLog.log({
+    actorId,
+    action: AuditAction.ROLE_CHANGED,
+    targetType: AuditTargetType.USER,
+    targetId,
+    metadata: { oldRole: target.role, newRole: dto.role },
+  });
+
+  return { data: updated };
+}
+
+// ✗ Yanlış — admin count kontrolü yok
+await this.prisma.user.update({ where: { id }, data: { role: dto.role } });
+```
+
+Admin kendi rolünü düşürürken aynı kural geçerli.
+
+## Kullanıcı Deaktivasyon
+
+`POST /admin/users/:id/deactivate`:
+- `is_active = false`
+- Tüm refresh token'lar revoke
+- `USER_DEACTIVATED` audit
+- İçerik diğer USER'lardan gizlenir [AP-002]
+
+Reactivate: `is_active = true`; `USER_REACTIVATED` audit; içerik otomatik görünür.
+
+Self-service deactivate `users/` modülünde — admin audit **yok** (normal user eylemi).
+
+## Admin Content Write & Audit
+
+Admin başkasının kaynağını düzenler/siler → audit zorunlu:
+
+| İşlem | Audit action |
+| --- | --- |
+| Admin campaign/character/homebrew PATCH | `CONTENT_EDITED` |
+| Admin campaign/character/homebrew DELETE | `CONTENT_DELETED` |
+| Role change | `ROLE_CHANGED` |
+| Deactivate | `USER_DEACTIVATED` |
+| Reactivate | `USER_REACTIVATED` |
+
+```typescript
+// ✓ Doğru — content edit + audit
+async adminUpdateCampaign(actorId: string, id: string, dto: UpdateCampaignDto) {
+  const existing = await this.prisma.campaign.findUnique({ where: { id } });
+  if (!existing) throw new NotFoundException();
+
+  const updated = await this.prisma.campaign.update({ where: { id }, data: dto });
+
+  await this.auditLog.log({
+    actorId,
+    action: AuditAction.CONTENT_EDITED,
+    targetType: AuditTargetType.CAMPAIGN,
+    targetId: id,
+    metadata: {
+      targetName: updated.name,
+      changedFields: Object.keys(dto),
+    },
+  });
+
+  return { data: updated };
+}
+
+// ✗ Yanlış — admin write audit'siz
+return this.prisma.campaign.update({ where: { id }, data: dto });
+```
+
+Admin kendi içeriğini admin panelden düzenlerse — spec'e göre yine `CONTENT_*` log (admin path kullanıldı).
+
+## AuditLogService
+
+```typescript
+@Injectable()
+export class AuditLogService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  async log(params: {
+    actorId: string;
+    action: AuditAction;
+    targetType: AuditTargetType;
+    targetId: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<void> {
+    await this.prisma.auditLog.create({ data: params });
+  }
+}
+```
+
+### Yazma Kuralları
+
+- **INSERT only** — `update`/`delete` on `audit_logs` yasak
+- Chain-hash tamper-evidence MVP dışı
+- Saklama süresiz (düşük hacim)
+- Admin UI MVP dışı — veri DB'de
+
+Metadata örnekleri → `docs/07` Bölüm 15.3 (kopyalama değil referans).
+
+### PII in Audit
+
+`USER_DEACTIVATED` metadata: email/username kabul edilir — audit actor ADMIN. Token/şifre asla.
+
+## Prisma audit_logs Model
+
+Alanlar: `id`, `actor_id`, `action`, `target_type`, `target_id`, `metadata` (JSONB), `created_at`.
+
+Enum değerleri shared ile uyumlu. Migration → `docs/02` Bölüm 3.8.
+
+## Listeleme Bypass Kuralları
+
+Admin list endpoint'leri normal policy filtrelerini atlar:
+
+| Normal | Admin |
+| --- | --- |
+| Campaign member-only | Tüm campaign'ler |
+| Character visibility | Tüm karakterler |
+| Homebrew DRAFT gizli | Tüm status |
+| Deaktive owner gizli | Görünür |
+
+```typescript
+// ✓ Doğru — admin list (no isActive filter)
+await this.prisma.campaign.findMany({ where: { /* search only */ } });
+
+// ✗ Yanlış — admin'de owner.isActive filter
+where: { owner: { isActive: true } }
+```
+
+## Hard Delete
+
+Admin DELETE fiziksel silme (MVP'de campaign/character/homebrew). Cascade spec'e uygun. Right to erasure / user hard delete MVP dışı.
+
+## DTO
+
+`change-role.dto.ts`:
+```typescript
+export class ChangeRoleDto {
+  @IsEnum(Role)
+  role: Role;
+}
+```
+
+Admin content PATCH normal domain DTO'ları reuse — duplicate schema yok.
+
+## Integration Test Matrisi
+
+Zorunlu senaryolar:
+- `USER` → `/admin/*` → `403`
+- `ADMIN` → list bypass (deaktive owner campaign görünür)
+- Son admin role demote → `422` `LAST_ADMIN`
+- Deactivate → refresh invalid + audit row
+- Content PATCH → `CONTENT_EDITED` audit insert
+- Audit tablosunda UPDATE/DELETE API yok
+
+## AdminService vs Domain Service
+
+Admin content PATCH domain validation reuse (`UpdateCampaignDto`) ama **policy bypass** — doğrudan Prisma update. Normal `CampaignsService.update` member'a 403 döner; admin path ayrı method.
+
+```typescript
+// admin.service.ts — bypass visibility/membership
+async adminUpdateCampaign(actorId: string, id: string, dto: UpdateCampaignDto) {
+  // no CampaignPolicy.canUpdate — ADMIN işlemi
+  const updated = await this.prisma.campaign.update({ where: { id }, data: dto });
+  await this.auditLog.log({ /* CONTENT_EDITED */ });
+  return { data: updated };
+}
+```
+
+## Admin User List Filtreleri
+
+Query: `search`, `role`, `isActive`, cursor pagination. Deaktive kullanıcılar listede görünür (admin tam görünürlük).
+
+## Official Content Admin Edit
+
+Seed official homebrew — admin `PATCH /admin/homebrew/:id` ile düzenleyebilir [AP-001]. Audit `CONTENT_EDITED` zorunlu.
+
+## Audit Action Enum
+
+`packages/shared` ve Prisma enum uyumlu:
+- `ROLE_CHANGED`
+- `USER_DEACTIVATED` / `USER_REACTIVATED`
+- `CONTENT_EDITED` / `CONTENT_DELETED`
+
+Target type: `USER`, `CAMPAIGN`, `CHARACTER`, `HOMEBREW`.
+
+## Transaction: Role Change + Audit
+
+Role change ve audit aynı `$transaction` — partial failure olmamalı.
+
+## Admin DELETE Cascade
+
+Campaign delete → dm_notes, members, characters `campaign_id` set null veya cascade — `docs/02` Bölüm 4. Admin delete audit `CONTENT_DELETED` metadata'da `targetName`, `ownerId`.
+
+## Admin Panel API Prefix
+
+Tüm `/admin/*` — global prefix sonrası `/api/v1/admin/users`. FE admin route ayrı; backend tek prefix.
+
+## Normal User vs Admin Path
+
+Aynı entity için iki path:
+- `/campaigns/:id` — policy kısıtlı
+- `/admin/campaigns/:id` — ADMIN only, bypass, audit
+
+Admin path kullanıldığında audit — normal path'te kullanıcı kendi kaynağını edit → audit yok.
+
+## Audit Log Okuma (MVP)
+
+Read endpoint yok — DB direct query veya post-MVP UI. `AuditLogService` yalnızca `log()` export.
+
+## Anti-pattern'ler
+
+- ❌ Admin route without `@Roles(Role.ADMIN)`
+- ❌ Admin write without audit log
+- ❌ `audit_logs` UPDATE/DELETE (Prisma veya raw)
+- ❌ Son admin korumasını atlama
+- ❌ Deactivate without refresh revoke
+- ❌ Admin list'te normal USER visibility filtresi
+- ❌ Normal user CRUD için audit log (gürültü)
+- ❌ Audit log admin UI placeholder (MVP dışı)
+- ❌ `password_hash` veya token audit metadata'da
+- ❌ Admin işlemini guard'sız public endpoint
+- ❌ Admin service'de `CampaignPolicy` ile self-block
+- ❌ İki admin path'i tek controller'da `@Roles` olmadan birleştirme
+
+---
+
+Detay: `docs/07_SECURITY_IMPLEMENTATION.md` Bölüm 15; `docs/03_API_CONTRACTS.md` Bölüm 12; `docs/02_DATABASE_SCHEMA.md` Bölüm 3.8; `docs/mimari-kararlar.md` [AUTH-008], [R-003], [AP-001], [AP-002]

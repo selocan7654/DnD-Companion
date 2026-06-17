@@ -1,0 +1,566 @@
+---
+description: '[Faz 4] DM Screen, Real-time ve Admin Panel — 7 iterasyon/chat (WS gateway+live PATCH → DM Screen FE → admin BE+audit → admin FE → deaktivasyon+LAST_ADMIN → integration testler → stabilizasyon). Mesajda "Faz 4 — İterasyon M" belirt.'
+---
+
+# Faz 4: DM Screen, Real-time ve Admin Panel
+
+## Goal
+
+DM Screen'de campaign üyelerinin canlı karakter alanları (HP, temp HP, conditions, death saves) WebSocket ile anlık senkronize olur; ADMIN rolü tüm kullanıcı ve içerikleri yönetir; admin eylemleri `audit_logs`'a **yalnızca INSERT** (append-only) ile yazılır — UPDATE/DELETE uygulama katmanında yasak. Önkoşul: Faz 2 + Faz 3 merge. Detay: `docs/10_IMPLEMENTATION_ROADMAP.md` Bölüm 6 + §4.1–§4.7.
+
+## Feature branch (zorunlu)
+
+`48-git-phase-branch.mdc` prosedürünü uygula. **Faz 2 ve Faz 3 insan gate onayı + merge sonrası** `main`'den feature branch aç; her iterasyon merge sonrası yeni branch.
+
+| İterasyon | Chat opener | Branch örneği |
+| --- | --- | --- |
+| 1 | `Faz 4 — İterasyon 1: WebSocket gateway + live PATCH` | `feat/faz4-ws-gateway-live` |
+| 2 | `Faz 4 — İterasyon 2: DM Screen frontend` | `feat/faz4-dm-screen-frontend` |
+| 3 | `Faz 4 — İterasyon 3: Admin backend + audit` | `feat/faz4-admin-backend` |
+| 4 | `Faz 4 — İterasyon 4: Admin frontend` | `feat/faz4-admin-frontend` |
+| 5 | `Faz 4 — İterasyon 5: Deaktivasyon filtreleri + LAST_ADMIN` | `feat/faz4-deactivate-filters` |
+| 6 | `Faz 4 — İterasyon 6: WS + admin integration tests` | `test/faz4-ws-admin-auth` |
+| 7 | `Faz 4 — İterasyon 7: Stabilizasyon` | `fix/faz4-stabilization` |
+
+**Yasak:** `main`'e doğrudan push; bir PR'da birden fazla iterasyon.
+
+## Bu fazın çalışma modeli
+
+- Tek sohbet fazı bitirmez — 7 ayrı chat ≈ 7 PR (iter 7 opsiyonel).
+- Her chat: `@53-phase-04-dm-screen-admin` + **「Faz 4 — İterasyon M」** + `48-git-phase-branch`.
+- Agent **yalnızca o iterasyonun Docs okuma sırasını** okur; tüm spec değil.
+- **Plan moduna geçme** — aşağıdaki iterasyon blueprint yeterli.
+- WebSocket: `@47-websocket-live-fields` + `16-backend-websocket.mdc`.
+- Admin/audit: `@17-backend-admin-audit.mdc` — append-only vurgusu zorunlu.
+- Spec tek kaynak: `docs/`; API body / ekran alan tablosu bu dosyada **kopyalanmaz**.
+
+---
+
+### İterasyon 1 — WebSocket gateway + live PATCH (4.1)
+
+**Hedef:** Socket.io gateway Redis adapter ile çalışır; JWT handshake doğrular; `PATCH /characters/:id/live` DB'ye yazar ve `character:live-update` room broadcast yapar; `join-campaign` üyelik kontrolü çalışır.
+
+**Teslim çıktısı:**
+- `apps/api/src/websocket/` — `websocket.module.ts`, `websocket.gateway.ts`
+- `apps/api/src/characters/dto/update-live-fields.dto.ts`
+- `characters.service.ts` — `updateLiveFields` + gateway inject
+- `characters.controller.ts` — `PATCH :id/live`
+- `character.policy.ts` — canUpdateLiveFields (owner veya campaign DM)
+- Minimal gateway unit test veya smoke (`websocket.gateway.spec.ts` iskelet)
+
+**Önkoşullar:**
+- [ ] Faz 2 merge — character CRUD, campaign membership, dm-notes çalışır
+- [ ] Faz 3 merge — homebrew modülü (admin iter 3 için; WS için zorunlu değil)
+- [ ] `docker compose up -d` — Redis + Postgres
+- [ ] `48-git-phase-branch` — `feat/faz4-ws-gateway-live` açılmış
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §4.1 — iterasyon kapsamı
+2. `docs/03_API_CONTRACTS.md` §7 (`PATCH …/live`) + §14 (WebSocket events)
+3. `docs/04_BACKEND_SPEC.md` §9 — gateway modül pattern
+4. `docs/07_SECURITY_IMPLEMENTATION.md` §4 — WS campaign membership ([AUTH-004])
+5. `@47-websocket-live-fields.mdc` — uygulama adımları (glob referans)
+
+**Uygulama planı:**
+1. `websocket.module.ts` — `@WebSocketGateway`, `afterInit` Redis adapter (`createAdapter`) (`docs/04` §9, `@47` Step 4)
+2. `handleConnection` — `handshake.auth.token` JWT verify; `isActive=false` → disconnect (`@47` Step 2)
+3. `@SubscribeMessage('join-campaign')` / `leave-campaign` — owner veya member; outsider → `error` `FORBIDDEN` (`docs/03` §14)
+4. `UpdateLiveFieldsDto` — `hitPointsCurrent`, `temporaryHitPoints`, `deathSaves`, `conditions` partial (`docs/03` §7)
+5. `CharactersService.updateLiveFields` — policy → Prisma update → `gateway.broadcastLiveUpdate` (`@47` Step 5)
+6. `CharacterPolicy.canUpdateLiveFields` — owner **veya** `campaign.ownerId === user.id` (`docs/01` live fields)
+7. Gateway smoke: bağlan → join → PATCH live → listener event alır (tam matris iter 6)
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Oluştur | `apps/api/src/websocket/*`, `dto/update-live-fields.dto.ts`, `websocket.gateway.spec.ts` (iskelet) |
+| Güncelle | `characters.service.ts`, `characters.controller.ts`, `characters.module.ts`, `character.policy.ts`, `app.module.ts` |
+| Dokunma | DM Screen FE (§4.2), `admin/` (§4.3), `audit_logs` migration (§4.3) |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| Room adı `campaign:<id>` | `docs/03` §14 | `client.join(\`campaign:${id}\`)` |
+| Live PATCH partial body | `docs/03` §7 | DTO optional alanlar; whitelist |
+| Broadcast `character:live-update` | `docs/03` §14 | Batch `fields` payload tercih |
+| WS auth token memory | `docs/07` §3 | `auth: { token }` handshake; localStorage yasak |
+
+**Kalite kapıları:**
+- [ ] `pnpm lint && pnpm typecheck` yeşil
+- [ ] `character.policy.spec.ts` — owner allow, outsider deny, DM allow
+- [ ] Gateway smoke: invalid token disconnect
+- [ ] `common/policies/` coverage %100 korunur
+
+**Bu iterasyonda yok:**
+- DM Screen React sayfası
+- Admin modülü, `audit_logs` tablosu
+- Deaktive owner filtreleri (§4.5)
+- Tam WS integration matrisi (§4.6)
+
+**Risk / dikkat:**
+- Circular dependency gateway ↔ characters — `forwardRef` veya event emitter pattern (`docs/04` §9)
+- Client→server live update event **ekleme** — yalnızca REST PATCH (`docs/03` §14 kazanır)
+- Field adları: `hitPointsCurrent` (roadmap `currentHp` değil)
+
+**Stop:**
+- [ ] `docker compose up -d && pnpm --filter api test -- websocket.gateway`
+- [ ] `pnpm lint && pnpm typecheck`
+- [ ] PR/onay → İterasyon 2
+
+---
+
+### İterasyon 2 — DM Screen frontend (4.2)
+
+**Hedef:** `S-DM-SCREEN` çalışır — canlı karakter kartları WebSocket ile güncellenir, DM notları CRUD/reorder görünür; masaüstü iki sütun, mobil tab geçişi.
+
+**Teslim çıktısı:**
+- `apps/web/src/pages/campaigns/DmScreenPage.tsx` (veya `features/dm-screen/`)
+- `apps/web/src/hooks/useWebSocket.ts`
+- `CharacterLiveCard.tsx`, `DmNotesPanel.tsx`, `ConnectionBanner.tsx`
+- Route `/campaigns/:id/dm-screen` + RTK Query tag invalidation / `updateQueryData`
+- `dmScreenApi` veya mevcut `campaignsApi` / `charactersApi` genişletme
+
+**Önkoşullar:**
+- [ ] İterasyon 1 Stop — gateway + `PATCH …/live` ayakta
+- [ ] Faz 2 dm-notes API merge
+- [ ] Branch: `feat/faz4-dm-screen-frontend`
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §4.2
+2. `docs/06_SCREEN_CATALOG.md` §6.1 — `S-DM-SCREEN` layout, WS, UX state
+3. `docs/05_FRONTEND_SPEC.md` §8 — Socket.io client, reconnect
+4. `docs/03_API_CONTRACTS.md` §14 — dinlenecek event'ler
+5. `@47-websocket-live-fields.mdc` Step 6–7 — FE hook pattern
+
+**Uygulama planı:**
+1. Route `App.tsx` — `/campaigns/:id/dm-screen`; campaign member guard (`docs/06` §6.1)
+2. `useWebSocket(campaignId)` — connect `auth.token` from Redux; emit `join-campaign` on mount (`docs/05` §8)
+3. `character:live-update` listener — `dispatch(charactersApi.util.updateQueryData(...))` batch + single field (`docs/06` §6.1)
+4. Sol panel: campaign'e atanmış karakterler listesi; HP/AC/conditions/death saves; inline live edit → `PATCH …/live` (`docs/03` §7)
+5. Sağ panel: dm-notes CRUD + reorder — mevcut Faz 2 API (`docs/03` §10)
+6. Responsive: `md:` iki sütun; mobil `Tabs` Characters \| Notes (`docs/06` §6.1)
+7. `ConnectionBanner` — disconnect sarı uyarı + auto-reconnect (`docs/06` §6.1 UX)
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Oluştur | `DmScreenPage.tsx`, `useWebSocket.ts`, `CharacterLiveCard.tsx`, `DmNotesPanel.tsx`, `ConnectionBanner.tsx` |
+| Güncelle | `App.tsx` routes, `campaignsApi.ts` veya `charactersApi.ts`, layout nav link (DM only) |
+| Dokunma | `admin/` routes (§4.4), backend gateway (§4.1 done) |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| `S-DM-SCREEN` route | `docs/06` §6.1 | `/campaigns/:id/dm-screen` |
+| WS cache patch | `docs/06` §6.1 | RTK `updateQueryData`; full refetch yok |
+| DM live edit yetkisi | `docs/01` live fields | UI: owner veya DM inline edit |
+| Page title İngilizce | `docs/06` | `"DM Screen — {campaignName}"` |
+
+**Kalite kapıları:**
+- [ ] Vitest: `useWebSocket` mock socket — event handler updates state
+- [ ] Vitest: disconnect banner render
+- [ ] `pnpm --filter web test` yeşil
+- [ ] Klavye: tab panel geçişi; live card `aria-label` (`25-frontend-a11y`)
+
+**Bu iterasyonda yok:**
+- Admin panel ekranları
+- Audit log UI
+- Portrait upload, dice roller
+
+**Risk / dikkat:**
+- Access token memory only — WS `auth.token` Redux'tan; refresh 401 interceptor mevcut pattern
+- Double PATCH + WS round-trip — UI optimistic değil; WS event authoritative (`docs/06` §6.1)
+
+**Stop:**
+- [ ] `pnpm --filter web test -- DmScreen` (veya ilgili spec)
+- [ ] `pnpm lint && pnpm typecheck && pnpm --filter web build`
+- [ ] Manuel: iki sekme — PATCH live → diğer sekme kart güncellenir
+- [ ] PR/onay → İterasyon 3
+
+---
+
+### İterasyon 3 — Admin backend + audit (4.3)
+
+**Hedef:** `admin/` modülü tüm §12 endpoint'lerini sunar; `audit_logs` migration uygulanır; her admin yazma `AuditLogService.log` ile **INSERT-only** kaydedilir.
+
+**Teslim çıktısı:**
+- `apps/api/src/admin/` — module, service, `admin-users.controller.ts`, `admin-content.controller.ts`
+- `apps/api/src/admin/audit-log.service.ts`
+- `apps/api/prisma/schema.prisma` — `AuditLog` model + migration
+- `packages/shared` — `AuditAction`, `AuditTargetType` enum (yoksa)
+- `roles.guard.ts` doğrulama — `@Roles(Role.ADMIN)` global
+
+**Önkoşullar:**
+- [ ] Faz 2 + Faz 3 merge — tüm content modülleri mevcut
+- [ ] İterasyon 1–2 Stop (veya paralel merge sırası: iter 3 WS'den bağımsız başlayabilir **yalnızca** Faz 2+3 merge sonrası)
+- [ ] Branch: `feat/faz4-admin-backend`
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §4.3
+2. `docs/03_API_CONTRACTS.md` §12 — admin endpoint listesi
+3. `docs/02_DATABASE_SCHEMA.md` §3.8 — `audit_logs` şema
+4. `docs/07_SECURITY_IMPLEMENTATION.md` §15 — audit kapsam + append-only
+5. `@17-backend-admin-audit.mdc` — modül yapısı, LAST_ADMIN, audit pattern
+
+**Uygulama planı:**
+1. Prisma `AuditLog` + migration `add-audit-logs` (`@42-add-prisma-migration`, `docs/02` §3.8)
+2. `AuditLogService.log` — **yalnızca** `prisma.auditLog.create`; update/delete metodu **yok** (`@17` AuditLogService)
+3. `AdminUsersController` — GET list, PATCH role, POST deactivate/reactivate (`docs/03` §12)
+4. `changeRole` — aktif admin count; son admin → `422 LAST_ADMIN` (`@17` Son Admin Koruması)
+5. Deactivate — `is_active=false`, refresh token revoke, `USER_DEACTIVATED` audit
+6. `AdminContentController` — campaigns/characters/homebrew admin CRUD + `PATCH …/status` homebrew (`docs/03` §12)
+7. Her admin PATCH/DELETE — `CONTENT_EDITED` / `CONTENT_DELETED` audit (`@17` Admin Content Write)
+8. Admin listeler visibility/üyelik bypass; response email dahil (`docs/03` §12)
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Oluştur | `admin/*`, `audit-log.service.ts`, migration, shared audit enums |
+| Güncelle | `app.module.ts`, `schema.prisma`, `packages/shared/src/enums.ts` |
+| Dokunma | `owner.isActive` filtreleri (§4.5), admin FE (§4.4), audit admin UI |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| Append-only audit | `docs/07` §15, `[AUD-003]` | Service'de update/delete yok |
+| POST deactivate | `docs/03` §12 | PATCH değil |
+| Campaign delete cascade | `docs/10` §6.3 | members sil; `campaign_id` NULL |
+| ADMIN bypass policy | `docs/01` | Admin service doğrudan Prisma |
+
+**Kalite kapıları:**
+- [ ] `audit-log.service.spec.ts` — create çağrısı; update metodu yok assert
+- [ ] `admin.service.spec.ts` — LAST_ADMIN throw `422`
+- [ ] `pnpm --filter api prisma migrate dev` başarılı
+- [ ] `@Roles(Role.ADMIN)` tüm admin controller'larda
+
+**Bu iterasyonda yok:**
+- Admin frontend
+- Deaktive owner public API filtreleri (§4.5)
+- Tam admin `*.auth.spec.ts` matrisi (§4.6)
+- Audit log okuma endpoint / UI
+
+**Risk / dikkat:**
+- Audit atlanan admin write — her PATCH/DELETE/role/deactivate'de `auditLog.log` (`@17` checklist)
+- `password_hash` / refresh token değerleri audit metadata'ya **yazılmaz**
+- Homebrew resmi içerik (`source=OFFICIAL`) — admin PATCH izinli (`docs/01`)
+
+**Stop:**
+- [ ] `pnpm --filter api prisma migrate dev && pnpm --filter api test -- admin`
+- [ ] `pnpm lint && pnpm typecheck`
+- [ ] PR/onay → İterasyon 4
+
+---
+
+### İterasyon 4 — Admin frontend (4.4)
+
+**Hedef:** Admin layout ve dört yönetim ekranı (`S-ADMIN-*`) çalışır — liste, arama, CRUD, rol/deaktivasyon onay modalları; yalnızca `role === ADMIN` erişir.
+
+**Teslim çıktısı:**
+- `apps/web/src/layouts/AdminLayout.tsx`
+- `apps/web/src/pages/admin/` — Users, Campaigns, Characters, Homebrew list/detail/edit
+- `apps/web/src/store/api/adminApi.ts` — RTK Query admin endpoints
+- Route guard `AdminRoute` — non-admin redirect 404 veya dashboard
+
+**Önkoşullar:**
+- [ ] İterasyon 3 Stop — admin API ayakta
+- [ ] Branch: `feat/faz4-admin-frontend`
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §4.4
+2. `docs/06_SCREEN_CATALOG.md` Grup 7 — `S-ADMIN-USERS` … `S-ADMIN-HOMEBREW`
+3. `docs/05_FRONTEND_SPEC.md` — admin route ağacı
+4. `docs/03_API_CONTRACTS.md` §12 — RTK endpoint eşlemesi
+5. `@41-add-new-screen.mdc` — route + RTK + a11y prosedürü
+
+**Uygulama planı:**
+1. `AdminLayout` — sidebar: Users, Campaigns, Characters, Homebrew (`docs/06` Grup 7)
+2. `AdminRoute` — `user.role === ADMIN`; değilse navigate away (`docs/05`)
+3. `S-ADMIN-USERS` — cursor list, search, role select modal, deactivate/reactivate (`docs/06`)
+4. `S-ADMIN-CAMPAIGNS` — list + edit modal + delete confirm (`docs/06`)
+5. `S-ADMIN-CHARACTERS` — list + edit + delete (`docs/06`)
+6. `S-ADMIN-HOMEBREW` — list + edit + status publish/unpublish (`PATCH …/status`)
+7. App nav — Admin Panel link yalnızca ADMIN (`docs/06` App Layout)
+8. Toast İngilizce; LAST_ADMIN error toast from API envelope
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Oluştur | `AdminLayout.tsx`, `pages/admin/*`, `adminApi.ts`, `AdminRoute.tsx` |
+| Güncelle | `App.tsx` routes, main layout nav, `store/index.ts` |
+| Dokunma | Audit log UI, deaktive filtre backend (§4.5) |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| `S-ADMIN-USERS` route | `docs/06` | `/admin/users` |
+| Onay modalı rol/deaktivasyon | `docs/06` Grup 7 | `role="dialog"` focus trap |
+| Email sütunu admin only | `docs/03` §12 | Normal user list'te yok |
+| Homebrew status toggle | `docs/03` §12 | `PATCH …/status` body |
+
+**Kalite kapıları:**
+- [ ] Vitest: `AdminRoute` — USER redirect, ADMIN render children
+- [ ] Vitest: Users table — deactivate button calls mutation (msw)
+- [ ] `pnpm --filter web test` yeşil
+- [ ] Dynamic `<title>`: `"Admin Users — DnD Companion"`
+
+**Bu iterasyonda yok:**
+- Audit log görüntüleme ekranı
+- Deaktive kullanıcı içerik rozeti (§4.5 backend sonrası FE polish §4.7)
+- Profil, upload
+
+**Risk / dikkat:**
+- Frontend ADMIN hide ≠ güvenlik — backend `RolesGuard` zaten zorunlu
+- Admin email PII — yalnızca admin ekranında göster
+
+**Stop:**
+- [ ] `pnpm --filter web test -- admin`
+- [ ] `pnpm lint && pnpm typecheck && pnpm --filter web build`
+- [ ] PR/onay → İterasyon 5
+
+---
+
+### İterasyon 5 — Deaktivasyon filtreleri + LAST_ADMIN (4.5)
+
+**Hedef:** Deaktive kullanıcının campaign/character/homebrew içeriği normal API'de gizlenir; admin endpoint'leri bypass eder; LAST_ADMIN ve deaktivasyon policy unit testleri yeşil.
+
+**Teslim çıktısı:**
+- `campaigns.service.ts`, `characters.service.ts`, `homebrew.service.ts` — list/read `owner: { isActive: true }` filtresi
+- `common/policies/` güncellemeleri — deaktive owner kaynakları outsider'a 404
+- `admin.service.spec.ts` / policy spec — LAST_ADMIN, deactivate side effects
+- Auth login — deaktive reject (mevcutsa doğrula, yoksa ekle)
+
+**Önkoşullar:**
+- [ ] İterasyon 3 Stop — admin deactivate endpoint
+- [ ] Branch: `feat/faz4-deactivate-filters`
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §4.5
+2. `docs/07_SECURITY_IMPLEMENTATION.md` §14 — deaktivasyon etkileri
+3. `docs/01_DOMAIN_MODEL.md` — deaktive kullanıcı görünürlük
+4. `docs/08_TESTING_STRATEGY.md` §5.5.1 — içerik gizleme testleri
+5. `@43-add-authorization-policy.mdc` — 404 gizleme pattern
+
+**Uygulama planı:**
+1. Campaign `findMany` / `findOne` — `where: { owner: { isActive: true } }` normal path (`docs/07` §14.1)
+2. Character list/read — deaktive owner → 404 outsider/member (`docs/01`)
+3. Homebrew galeri — deaktive owner homebrew listede yok; published + active owner (`docs/01`)
+4. Admin `GET /admin/*` — filtre **yok** (`docs/10` §6.5)
+5. Reaktivasyon — filtre otomatik kalkar; ek kod gerekmez
+6. `LastAdminException` / `422 LAST_ADMIN` — unit test admin count edge (`@17`)
+7. Policy spec: deaktive owner campaign — `canRead` false for stranger
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Güncelle | `campaigns.service.ts`, `characters.service.ts`, `homebrew.service.ts`, `*.policy.ts`, `*.policy.spec.ts`, `admin.service.spec.ts` |
+| Dokunma | Tam integration matris (§4.6), WS gateway |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| Deaktive içerik gizleme | `docs/07` §14 | Prisma relation filter |
+| Admin bypass | `docs/10` §6.5 | Admin service ayrı query |
+| Yetkisiz → 404 | `docs/03` §2 | Varlık ifşası yok |
+| Reaktivasyon görünürlük | `docs/01` | Filtre kalkınca otomatik |
+
+**Kalite kapıları:**
+- [ ] Policy unit: deaktive owner deny
+- [ ] `admin.service.spec.ts` — LAST_ADMIN `422`
+- [ ] `pnpm --filter api test -- policy` yeşil
+- [ ] `common/policies/` %100 coverage
+
+**Bu iterasyonda yok:**
+- Tam `*.auth.spec.ts` supertest matrisi (§4.6)
+- Self-service deactivate (Faz 5)
+- Hard delete / erasure
+
+**Risk / dikkat:**
+- ADMIN kullanıcı deaktive — içerik admin panelde görünür kalır
+- Collection'da deaktive owner homebrew — koleksiyon item 404 veya gizle (`docs/01` — tutarlılık kontrol)
+
+**Stop:**
+- [ ] `pnpm --filter api test -- policy admin.service`
+- [ ] `pnpm lint && pnpm typecheck`
+- [ ] PR/onay → İterasyon 6
+
+---
+
+### İterasyon 6 — WS + admin integration tests (4.6)
+
+**Hedef:** WebSocket gateway ve admin endpoint yetki matrisleri `docs/08` §5.5–§5.7 ile uyumlu integration testlerle kapsanır; audit INSERT doğrulanır.
+
+**Teslim çıktısı:**
+- `apps/api/src/websocket/websocket.gateway.spec.ts` — tam matris
+- `apps/api/src/admin/admin.auth.spec.ts` — users + content admin deny/allow
+- `apps/api/test/factories/` — gerekirse admin audit assertion helper
+- Deaktive içerik gizleme integration (`docs/08` §5.5.1)
+
+**Önkoşullar:**
+- [ ] İterasyon 1–5 Stop
+- [ ] Branch: `test/faz4-ws-admin-auth`
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §4.6
+2. `docs/08_TESTING_STRATEGY.md` §5.5, §5.5.1, §5.7, §5.6
+3. `docs/03_API_CONTRACTS.md` §12–§14 — beklenen status kodları
+4. `docs/07_SECURITY_IMPLEMENTATION.md` §15 — audit action tipleri
+5. `35-testing.mdc` — integration iskelet, `afterEach` truncate
+
+**Uygulama planı:**
+1. WS spec — valid JWT connect; invalid disconnect (`docs/08` §5.7)
+2. WS spec — outsider `join-campaign` → error FORBIDDEN
+3. WS spec — PATCH live → ikinci client `character:live-update` (socket.io-client test)
+4. `admin.auth.spec.ts` — USER → admin routes **403**; guest **401**
+5. Admin role change → `audit_logs` row `ROLE_CHANGED` (`docs/07` §15)
+6. Admin deactivate → audit `USER_DEACTIVATED`; login fail
+7. LAST_ADMIN → **422** integration
+8. Deaktive owner campaign — member GET **404** (`docs/08` §5.5.1)
+9. `*.auth.spec.ts` dosya adı kuralı (`docs/08` §5.6)
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Oluştur / Güncelle | `websocket.gateway.spec.ts`, `admin.auth.spec.ts`, test helpers |
+| Dokunma | Production gateway logic (yalnızca test), frontend |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| WS join deny | `docs/08` §5.7 | supertest + socket.io-client |
+| Admin 403 USER | `docs/08` §5.5 | her admin route |
+| Audit INSERT only | `docs/07` §15 | `prisma.auditLog.findMany` assert |
+| LAST_ADMIN 422 | `docs/08` §5.5 | seed tek admin |
+
+**Kalite kapıları:**
+- [ ] Tüm §5.5–§5.7 matris hücreleri `it()` ile
+- [ ] `pnpm --filter api test -- --ci --coverage` — policies/guards %100
+- [ ] `pnpm lint && pnpm typecheck && pnpm test` yeşil
+- [ ] Testsiz yetki kuralı merge edilmez ([CODE-004])
+
+**Bu iterasyonda yok:**
+- E2E Playwright
+- Audit UI testleri
+- Load/stress WS test
+
+**Risk / dikkat:**
+- Flaky WS test — `afterEach` truncate + unique campaign per test
+- Redis test env — docker compose CI'da zorunlu
+
+**Stop:**
+- [ ] `docker compose up -d && pnpm --filter api test -- --ci --coverage`
+- [ ] `pnpm lint && pnpm typecheck && pnpm test`
+- [ ] PR/onay → İterasyon 7 (opsiyonel) veya Faz Done
+
+---
+
+### İterasyon 7 — Stabilizasyon (4.7, opsiyonel)
+
+**Hedef:** CI kırmızıları, WS reconnect UX, test gap ve Faz 4 Done Definition checklist doğrulanır; insan gate öncesi son düzeltmeler.
+
+**Teslim çıktısı:**
+- Bug fix PR'ları (scope içi)
+- Gap kapatılmış testler
+- Faz 4 checklist PR açıklamasında işaretli
+
+**Önkoşullar:**
+- [ ] İterasyon 6 Stop — ana matris yeşil
+- [ ] Branch: `fix/faz4-stabilization`
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §4.7 + Faz 4 Çıktı Kriteri
+2. `docs/08_TESTING_STRATEGY.md` — coverage gap
+3. `docs/10_IMPLEMENTATION_ROADMAP.md` Bölüm 9 — insan gate
+4. `@46-fix-failing-test.mdc` — CI fix prosedürü
+5. `@phase-controller` skill — opsiyonel gap audit (kod değiştirmez)
+
+**Uygulama planı:**
+1. CI log triage — flaky WS, migration sırası
+2. DM Screen reconnect banner polish — exponential backoff (`docs/05` §8)
+3. Admin FE edge — empty state, LAST_ADMIN toast
+4. Coverage gap — `auth/` ≥%95, policies %100
+5. Faz 4 çıktı kriterleri checklist — PR body
+6. Opsiyonel: `@phase-controller` gap raporu
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Güncelle | Yalnızca stabilizasyon gerektiren dosyalar (≤6) |
+| Dokunma | Yeni feature, Faz 5 scope |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| Faz 4 Done | `docs/10` Faz 4 çıktı | PR checklist |
+| İnsan gate | `docs/10` Bölüm 9 | Agent merge etmez |
+| Real-time manuel test | `docs/10` Bölüm 9 Faz 4 | İki sekme — insan |
+
+**Kalite kapıları:**
+- [ ] `pnpm lint && pnpm typecheck && pnpm test && pnpm build` yeşil
+- [ ] Açık `TODO: mimari karar` yok
+- [ ] Faz 4 çıktı kriterleri tamam
+
+**Bu iterasyonda yok:**
+- Yeni endpoint/ekran
+- Faz 5 upload/profil
+- Audit admin UI
+
+**Risk / dikkat:**
+- Scope creep reddet — yalnızca stabilizasyon
+- Production deploy yasak
+
+**Stop:**
+- [ ] `docker compose down -v && docker compose up -d && pnpm --filter api prisma migrate deploy && pnpm --filter api prisma db seed`
+- [ ] `pnpm lint && pnpm typecheck && pnpm test && pnpm --filter web build && pnpm --filter api build`
+- [ ] Faz 4 Done Definition checklist PR'da
+- [ ] **İnsan faz onayı bekle** — Faz 5 planlaması onay sonrası
+
+---
+
+## Required Context
+
+- `docs/10_IMPLEMENTATION_ROADMAP.md` Bölüm 6 + §4.1–§4.7 + Bölüm 8 (Faz 4 Oturumları)
+- `docs/mimari-kararlar.md` — `[AUTH-004]`, `[AUTH-008]`, `[AUD-002]`, `[AUD-003]`, `[CODE-004]`
+- İterasyon başına: yalnızca o iterasyonun **Docs okuma sırası**
+- How-to: `@47-websocket-live-fields`, `@17-backend-admin-audit`, `@40-add-new-endpoint`, `@41-add-new-screen`, `@42-add-prisma-migration`, `@43-add-authorization-policy`, `@46-fix-failing-test`, `@48-git-phase-branch`
+- Glob: `16-backend-websocket.mdc`, `17-backend-admin-audit.mdc`
+
+## Done Definition
+
+- [ ] WS handshake JWT; outsider `join-campaign` → FORBIDDEN (`docs/10` Faz 4 çıktı)
+- [ ] `PATCH …/live` → `character:live-update` room broadcast
+- [ ] `S-DM-SCREEN` masaüstü/mobil; DM notları CRUD
+- [ ] Admin 4 ekran; `RolesGuard` + son admin `422 LAST_ADMIN`
+- [ ] Deaktive kullanıcı içeriği normal API'de gizli; admin bypass
+- [ ] Admin eylemleri `audit_logs` **INSERT-only** (append-only)
+- [ ] WS + admin integration test matrisi yeşil; CI yeşil
+- [ ] UI metinleri İngilizce; a11y temel kontroller
+- [ ] İnsan faz gate onayı (`docs/10` Bölüm 9)
+
+## Explicit Don'ts
+
+- Audit log admin UI, chain-hash tamper-evidence ([AUD-OPEN-2])
+- Client→server WS live field update (yalnızca REST PATCH)
+- Dice roller, initiative/combat tracker, geniş real-time scope
+- `audit_logs` UPDATE/DELETE uygulama katmanında
+- Guard'sız admin endpoint; raw SQL; access token localStorage
+- Profil, upload, Sentry (Faz 5)
+- `main`'e push; production deploy; faz geçişi onaysız
+- API body / ekran tablosunu bu `.mdc`'ye kopyalama
+
+---
+
+Phase done → `docs/10_IMPLEMENTATION_ROADMAP.md` Faz 4 insan gate; opsiyonel `@phase-controller` gap audit.

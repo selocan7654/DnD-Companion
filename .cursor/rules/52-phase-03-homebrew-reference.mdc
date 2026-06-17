@@ -1,0 +1,580 @@
+---
+description: '[Faz 3] Homebrew, Koleksiyon ve Referans Verisi — 7 iterasyon/chat (prisma+seed iskelet → homebrew BE → collection+reference BE → homebrew FE → collection+reference FE → 5e seed data → stabilizasyon). Mesajda "Faz 3 — İterasyon M" belirt.'
+---
+
+# Faz 3: Homebrew, Koleksiyon ve Referans Verisi
+
+## Goal
+
+Homebrew oluşturma/yayınlama döngüsü, **misafir erişimli** galeri ve referans sayfaları, kullanıcı koleksiyonu uçtan uca çalışır. `homebrew_items` tek tablo (`source` ile resmi vs homebrew); JSONB validasyonu `packages/shared/schemas/homebrew/` Zod şemalarıyla. Önkoşul: Faz 1 merge; Faz 2 ile paralel geliştirilebilir. Detay: `docs/10_IMPLEMENTATION_ROADMAP.md` Bölüm 5.
+
+## Feature branch (zorunlu)
+
+`48-git-phase-branch.mdc` prosedürünü uygula. **İterasyon 1 başlamadan önce** `main`'den feature branch aç; her iterasyon merge sonrası yeni branch.
+
+| İterasyon | Chat opener | Branch örneği |
+| --- | --- | --- |
+| 1 | `Faz 3 — İterasyon 1: Prisma homebrew + seed iskelet` | `feat/faz3-prisma-homebrew-seed-skeleton` |
+| 2 | `Faz 3 — İterasyon 2: Homebrew backend` | `feat/faz3-homebrew-backend` |
+| 3 | `Faz 3 — İterasyon 3: Collection + Reference backend` | `feat/faz3-collection-reference-backend` |
+| 4 | `Faz 3 — İterasyon 4: Homebrew frontend` | `feat/faz3-homebrew-frontend` |
+| 5 | `Faz 3 — İterasyon 5: Collection + Reference frontend` | `feat/faz3-collection-reference-frontend` |
+| 6 | `Faz 3 — İterasyon 6: 5e seed data` | `feat/faz3-official-5e-seed-data` |
+| 7 | `Faz 3 — İterasyon 7: Stabilizasyon` | `fix/faz3-stabilization` |
+
+**Yasak:** `main`'e doğrudan push; bir PR'da birden fazla iterasyon.
+
+## Bu fazın çalışma modeli
+
+- Tek sohbet fazı bitirmez — 7 ayrı chat ≈ 7 PR (iter 7 opsiyonel).
+- Her chat: `@52-phase-03-homebrew-reference` + **「Faz 3 — İterasyon M」** + `48-git-phase-branch`.
+- Agent **yalnızca o iterasyonun Docs okuma sırasını** okur; tüm spec değil.
+- **Plan moduna geçme** — aşağıdaki iterasyon blueprint yeterli.
+- API path tek kaynak: `docs/03_API_CONTRACTS.md` §8–11 (`/homebrew`, `/collections`, `/reference/spells` …).
+- Spec tek kaynak: `docs/`; API body / ekran alan tablosu bu dosyada **kopyalanmaz**.
+
+---
+
+### İterasyon 1 — Prisma + seed iskelet (3.1)
+
+**Hedef:** `homebrew_items` ve `collection_items` migration uygulanır; `prisma/seed-data/` iskeleti ve seed script döngüsü (boş/minimal JSON) idempotent çalışır; Faz 1 admin seed korunur.
+
+**Teslim çıktısı:**
+- `apps/api/prisma/schema.prisma` — `HomebrewItem`, `CollectionItem` modelleri
+- Migration dosyası (`add-homebrew-collection-tables` veya eşdeğer)
+- `apps/api/prisma/seed-data/` — 6 boş/minimal JSON (`spells.json`, `monsters.json`, …)
+- `apps/api/prisma/seed.ts` — resmi veri upsert döngüsü iskeleti (Zod stub veya passthrough; tam şema iter 2)
+- `packages/shared` — `HomebrewType`, `HomebrewStatus`, `Source` enum export doğrulama
+
+**Önkoşullar:**
+- [ ] Faz 1 merge — `users` tablosu ve admin seed çalışıyor
+- [ ] `48-git-phase-branch` — `feat/faz3-prisma-homebrew-seed-skeleton` branch açılmış
+- [ ] `docker compose up -d` — Postgres erişilebilir
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §3.1 — iterasyon kapsamı
+2. `docs/02_DATABASE_SCHEMA.md` §4 — `homebrew_items`, `collection_items` kolon/index/FK
+3. `docs/01_DOMAIN_MODEL.md` §7–8 — HomebrewItem, CollectionItem entity kuralları
+4. `docs/02_DATABASE_SCHEMA.md` §6 — seed-data dizin yapısı ve upsert pattern
+5. `docs/09_DEV_WORKFLOW.md` §5 — migration + seed komutları
+
+**Uygulama planı:**
+1. `schema.prisma` — `HomebrewItem` (`@@unique([name, type, source])`, index'ler); `CollectionItem` composite PK (`docs/02` §4; `@42-add-prisma-migration`)
+2. `pnpm --filter api prisma migrate dev` — migration commit
+3. `prisma/seed-data/` — 6 JSON dosyası (her biri `[]` veya 1–2 örnek kayıt; tam veri iter 6)
+4. `seed.ts` — admin upsert koru; `for (const file of [...])` döngüsü + `upsert` where `name_type_source` (`docs/02` §6.2)
+5. `packages/shared/src/enums.ts` — `HomebrewType`, `HomebrewStatus`, `Source` Faz 1 ile uyumlu; eksikse ekle
+6. Seed çalıştır — hata yok; `homebrew_items` tablosu oluşmuş
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Oluştur | `apps/api/prisma/migrations/*_add_homebrew_collection/`, `apps/api/prisma/seed-data/*.json` |
+| Güncelle | `apps/api/prisma/schema.prisma`, `apps/api/prisma/seed.ts`, `packages/shared/src/enums.ts` (gerekirse), `packages/shared/src/index.ts` |
+| Dokunma | Homebrew/collection/reference modülleri, Zod şemaları, frontend (iter 2+) |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| `homebrew_items` unique `(name, type, source)` | `docs/02` §4 | Prisma `@@unique([name, type, source])` |
+| `owner_id` nullable (resmi içerik) | `docs/01` §7 | FK `User?`, `onDelete: SetNull` |
+| `collection_items` composite PK | `docs/02` §4 | `@@id([userId, homebrewItemId])` |
+| Seed idempotent upsert | `docs/02` §6.2 | `name_type_source` where clause |
+
+**Kalite kapıları:**
+- [ ] `pnpm --filter api prisma migrate deploy` yeşil (CI uyumlu)
+- [ ] `pnpm --filter api prisma db seed` — admin + iskelet veri hatasız
+- [ ] `pnpm lint && pnpm typecheck` yeşil
+- [ ] Migration PR'da commit edilmiş
+
+**Bu iterasyonda yok:**
+- NestJS homebrew/collection/reference modülleri
+- `packages/shared/schemas/homebrew/` Zod dosyaları (iter 2)
+- Tam 5e JSON verisi (iter 6)
+- Frontend route/ekran
+
+**Risk / dikkat:**
+- Faz 2 paralel çalışıyorsa migration çakışması — `main` rebase önce
+- Enum değerleri `docs/01` Source listesi ile uyumlu olmalı
+- Raw SQL yasak — yalnızca Prisma Client ([CODE-004])
+
+**Stop:**
+- [ ] `docker compose up -d && pnpm --filter api prisma migrate dev && pnpm --filter api prisma db seed`
+- [ ] `pnpm lint && pnpm typecheck`
+- [ ] PR/onay → İterasyon 2
+
+---
+
+### İterasyon 2 — Homebrew backend + testler (3.2)
+
+**Hedef:** Homebrew CRUD, publish/unpublish, galeri (🔓 misafir) ve My Creations endpoint'leri çalışır; 6 tip JSONB Zod validasyonu; `homebrew.auth.spec.ts` matrisi yeşil.
+
+**Teslim çıktısı:**
+- `apps/api/src/homebrew/` — module, controller, service, DTO'lar
+- `apps/api/src/common/policies/homebrew.policy.ts`
+- `packages/shared/schemas/homebrew/` — 6 Zod şema + `index.ts` export
+- `apps/api/test/factories/homebrew.factory.ts`
+- `apps/api/src/homebrew/homebrew.auth.spec.ts` (veya `test/homebrew.auth.spec.ts`)
+
+**Önkoşullar:**
+- [ ] İterasyon 1 Stop — migration + seed iskelet yeşil
+- [ ] Auth modülü çalışıyor (`JwtAuthGuard`, `EmailVerifiedGuard`, `@Public()`)
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §3.2
+2. `docs/03_API_CONTRACTS.md` §8 — homebrew endpoint contract
+3. `docs/04_BACKEND_SPEC.md` §7 — Homebrew data Zod validation pattern
+4. `docs/07_SECURITY_IMPLEMENTATION.md` §4 — read auth, 404/403, email verified yazma
+5. `docs/08_TESTING_STRATEGY.md` §5.4 — homebrew yetki matrisi
+
+**Uygulama planı:**
+1. `packages/shared/schemas/homebrew/` — `spell`, `monster`, `feat`, `background`, `magic-item`, `subclass` şemaları (`docs/02` §5; `docs/04` §7)
+2. `homebrew.policy.ts` — `canRead`, `canCreate`, `canUpdate`, `canDelete`, `canPublish`; ADMIN bypass; draft → 404 non-owner (`docs/01` §11, `@43-add-authorization-policy`)
+3. DTO'lar — `CreateHomebrewDto`, `UpdateHomebrewDto`, `ListHomebrewQueryDto` (`class-validator`; `type` body'de)
+4. `HomebrewService` — create (`source: HOMEBREW`, `DRAFT`), Zod `safeParse` → `400` + `details`; galeri: `PUBLISHED` + aktif owner filtresi; publish/unpublish state machine (`docs/01` §11)
+5. `HomebrewController` — `@Public()` galeri + published detail; yazma: `EmailVerifiedGuard`; path'ler `docs/03` §8 (`@40-add-new-endpoint`)
+6. `homebrew.auth.spec.ts` — `docs/08` §5.4 matrisinin tamamı; guest galeri 200 assert
+7. `policies/` coverage %100 (`docs/04-quality-gates`)
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Oluştur | `apps/api/src/homebrew/**`, `common/policies/homebrew.policy.ts`, `packages/shared/schemas/homebrew/**`, `test/factories/homebrew.factory.ts`, `homebrew.auth.spec.ts`, `homebrew.policy.spec.ts` |
+| Güncelle | `apps/api/src/app.module.ts`, `packages/shared/src/index.ts` |
+| Dokunma | Collection/reference modülleri (iter 3), frontend (iter 4), tam seed (iter 6) |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| `GET /homebrew` 🔓 misafir | `docs/03` §8 | `@Public()`; yalnızca `PUBLISHED` |
+| `POST /homebrew` email verified | `docs/03` §8, `docs/07` §4 | `EmailVerifiedGuard`; `source` auto HOMEBREW |
+| Draft read non-owner | `docs/03` §8 | **404** (varlık gizleme) |
+| Resmi içerik PATCH/DELETE | `docs/01` §7 | `403` — `source != HOMEBREW` |
+| Publish `email_verified_at` | `docs/03` §8 | `403` `EMAIL_NOT_VERIFIED` |
+| JSONB Zod | `docs/04` §7 | Service `safeParse`; shared import |
+
+**Kalite kapıları:**
+- [ ] Integration: create → publish → galeri listesinde görünür
+- [ ] Deny: guest POST 401; unverified POST 403; otherUser PATCH draft 403/404
+- [ ] Deny: invalid `data` → 400 + `details`
+- [ ] `pnpm --filter api test -- --ci --coverage` — `policies/` %100
+- [ ] `pnpm lint && pnpm typecheck` yeşil
+
+**Bu iterasyonda yok:**
+- Collection/reference endpoint'leri
+- Homebrew frontend
+- Tam 5e seed dosyaları
+- Admin homebrew paneli (Faz 4)
+- Deaktive owner gizleme (Faz 4 §6.5)
+
+**Risk / dikkat:**
+- Galeri sorgusunda deaktive owner homebrew'ü **şimdilik** filtreleme yok — Faz 4'te `owner.is_active` filtresi eklenir
+- `GET /homebrew/my-creations` yalnızca sahip — başka kullanıcı 403
+- `type` path'te değil — `docs/03` §8 body alanı
+
+**Stop:**
+- [ ] `docker compose up -d && pnpm --filter api prisma migrate deploy`
+- [ ] `pnpm --filter api test -- homebrew --ci`
+- [ ] `pnpm lint && pnpm typecheck && pnpm test`
+- [ ] PR/onay → İterasyon 3
+
+---
+
+### İterasyon 3 — Collection + Reference backend + testler (3.3)
+
+**Hedef:** Collection CRUD (`/collections`) ve tüm Reference read endpoint'leri (🔓 misafir) çalışır; integration testler yeşil.
+
+**Teslim çıktısı:**
+- `apps/api/src/collections/` — module, controller, service
+- `apps/api/src/reference/` — module, controller, service
+- `packages/shared/constants/classes.ts`, `races.ts` (sabit referans)
+- `common/policies/collection.policy.ts` (gerekirse)
+- `collection.auth.spec.ts`, `reference` integration spec
+
+**Önkoşullar:**
+- [ ] İterasyon 2 Stop — homebrew API + policy yeşil
+- [ ] Test factory'de `createTestHomebrew` published/draft varyantları mevcut
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §3.3
+2. `docs/03_API_CONTRACTS.md` §9 — collection contract
+3. `docs/03_API_CONTRACTS.md` §11 — reference endpoint listesi + filtreler
+4. `docs/04_BACKEND_SPEC.md` §7–8 — liste pagination pattern
+5. `docs/08_TESTING_STRATEGY.md` §5.4.1–5.4.2 — collection/reference matrisleri
+
+**Uygulama planı:**
+1. `CollectionsService` — add (yalnızca `PUBLISHED`), remove, list (`isUnpublished` computed: item `DRAFT` ama collection'da kalmış); `409` duplicate (`docs/03` §9)
+2. `CollectionsController` — `GET/POST/DELETE /collections`; tümü auth + email verified
+3. `ReferenceService` — tip bazlı list/detail; `source != HOMEBREW`; spell/monster ek filtreler (`level`, `challengeRating` …) (`docs/03` §11)
+4. `ReferenceController` — tüm route'lar `@Public()`; path'ler: `/reference/spells`, `/reference/monsters`, … `/reference/classes`, `/reference/races`
+5. `packages/shared/constants/classes.ts`, `races.ts` — `DND_CLASSES`, `DND_RACES` (`docs/03` §11 Classes ve Races)
+6. `collection.auth.spec.ts` — `docs/08` §5.4.1
+7. Reference spec — guest 200 list + detail; invalid id 404
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Oluştur | `apps/api/src/collections/**`, `apps/api/src/reference/**`, `packages/shared/constants/classes.ts`, `races.ts`, `collection.auth.spec.ts`, `reference.controller.spec.ts` |
+| Güncelle | `apps/api/src/app.module.ts`, `packages/shared/src/index.ts` |
+| Dokunma | Frontend (iter 4–5), seed tam veri (iter 6), admin endpoints |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| Collection yalnızca sahip | `docs/03` §9 | `userId === currentUser.id` |
+| Add published only | `docs/03` §9 | Draft → **404** |
+| `isUnpublished` flag | `docs/03` §9 | `status === DRAFT` + collection'da |
+| Reference 🔓 public | `docs/03` §11 | `@Public()` tüm GET |
+| `source != HOMEBREW` | `docs/03` §11 | Prisma `where` filtresi |
+| Classes/races sabit | `docs/03` §11 | Shared constants döndür |
+
+**Kalite kapıları:**
+- [ ] Integration: add published → list → delete → 204
+- [ ] Deny: add draft 404; duplicate 409; otherUser GET collections 403
+- [ ] Guest: `GET /reference/spells` 200
+- [ ] `pnpm --filter api test -- --ci` yeşil
+- [ ] `pnpm lint && pnpm typecheck` yeşil
+
+**Bu iterasyonda yok:**
+- Frontend sayfaları
+- Tam seed JSON (iter 6)
+- Admin reference yazma
+- Full-text search engine
+
+**Risk / dikkat:**
+- Unpublish sonrası collection satırı **silinmez** — `isUnpublished: true` UI için (`docs/01` §11)
+- Reference list cursor pagination — offset yok (`docs/04` §10)
+- Path tekil `/collection` değil — `/collections` (`docs/03` §9)
+
+**Stop:**
+- [ ] `pnpm --filter api test -- collection reference --ci`
+- [ ] `pnpm lint && pnpm typecheck && pnpm test`
+- [ ] PR/onay → İterasyon 4
+
+---
+
+### İterasyon 4 — Homebrew frontend (3.4)
+
+**Hedef:** Homebrew galeri, detay, oluşturma/düzenleme ve My Creations ekranları çalışır; galeri misafir erişimli; RHF + shared Zod formları.
+
+**Teslim çıktısı:**
+- `apps/web/src/pages/homebrew/` — Gallery, Detail, Create, Edit, MyCreations
+- `apps/web/src/features/homebrew/` — `HomebrewForm`, `HomebrewCard`, `StatBlock` (temel)
+- `apps/web/src/store/api/homebrewApi.ts`
+- Route kayıtları + sidebar nav (`docs/06` §3)
+- Vitest: form validation, guest galeri render
+
+**Önkoşullar:**
+- [ ] İterasyon 3 Stop — homebrew + collection + reference API ayakta
+- [ ] `pnpm --filter api dev` + `pnpm --filter web dev` paralel
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §3.4
+2. `docs/06_SCREEN_CATALOG.md` §8 — `S-HOMEBREW-GALLERY`, `S-HOMEBREW-DETAIL`, `S-HOMEBREW-CREATE`, `S-HOMEBREW-EDIT`, `S-MY-CREATIONS`
+3. `docs/05_FRONTEND_SPEC.md` §3–6 — route, RTK Query, form pattern
+4. `docs/03_API_CONTRACTS.md` §8 — FE çağrıları (query param, response shape)
+5. `docs/07_SECURITY_IMPLEMENTATION.md` §3 — access token memory; misafir public route
+
+**Uygulama planı:**
+1. `homebrewApi.ts` — `getHomebrewGallery`, `getHomebrewDetail`, `createHomebrew`, `updateHomebrew`, `deleteHomebrew`, `publishHomebrew`, `unpublishHomebrew`, `getMyCreations`; tag `HomebrewList`, `Homebrew:{id}` (`docs/06` §8.1)
+2. Route'lar — `/homebrew`, `/homebrew/:id`, `/homebrew/new`, `/homebrew/:id/edit`, `/my-creations`; galeri/detay **public** (auth guard yok); create/edit/my-creations protected + email verified UX (`@41-add-new-screen`)
+3. `HomebrewGalleryPage` — search, type/source filter, sort, cursor pagination; misafirde Create butonu gizli (`docs/06` §8.1)
+4. `HomebrewForm` — tip seçimi → dinamik `data` alanları; shared Zod resolver (`docs/06` §8.3)
+5. `HomebrewDetailPage` — `StatBlock` render; sahibi için Edit/Publish/Unpublish; misafir collection butonu iter 5'te wire
+6. `MyCreationsPage` — status filter; draft/published badge (`docs/06` §8.5)
+7. Vitest — Zod validation error İngilizce; unauthenticated create redirect
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Oluştur | `pages/homebrew/**`, `features/homebrew/**`, `store/api/homebrewApi.ts`, `*.test.tsx` |
+| Güncelle | `routes/**` veya `App.tsx`, sidebar/nav config, `store/api/index.ts` |
+| Dokunma | Collection/reference sayfaları (iter 5), seed (iter 6), upload (Faz 5) |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| `S-HOMEBREW-GALLERY` misafir | `docs/06` §8.1 | Public route; no auth redirect |
+| Create auth + verified | `docs/06` §8.1 | Button hidden/disabled unverified |
+| Dinamik form Zod | `docs/06` §8.3 | `packages/shared/schemas/homebrew` import |
+| My Creations owner only | `docs/06` §8.5 | Protected route |
+| UI metinleri İngilizce | `docs/00` §9 | i18n yok |
+
+**Kalite kapıları:**
+- [ ] Vitest: form validation error state
+- [ ] Vitest: gallery renders without auth token
+- [ ] `pnpm --filter web test -- --ci` yeşil
+- [ ] `pnpm lint && pnpm typecheck` yeşil
+- [ ] Manuel: misafir `/homebrew` açılır
+
+**Bu iterasyonda yok:**
+- `S-MY-COLLECTION`, reference sayfaları (iter 5)
+- Image upload (Faz 5) — `imageUrl` null kabul
+- Admin homebrew UI (Faz 4)
+
+**Risk / dikkat:**
+- Frontend hide ≠ güvenlik — backend guard'lar zaten var
+- Draft detay misafirde 404 — FE error state (`docs/06` §8.2)
+- `StatBlock` MVP'de tip bazlı minimal render yeterli — polish iter 7
+
+**Stop:**
+- [ ] `pnpm --filter web test -- --ci`
+- [ ] `pnpm lint && pnpm typecheck && pnpm test`
+- [ ] `pnpm --filter web build`
+- [ ] PR/onay → İterasyon 5
+
+---
+
+### İterasyon 5 — Collection + Reference frontend (3.5)
+
+**Hedef:** My Collection ve Reference list/detail ekranları çalışır; reference misafir erişimli; collection add/remove homebrew detaydan wire edilir.
+
+**Teslim çıktısı:**
+- `apps/web/src/pages/collection/MyCollectionPage.tsx` (`S-MY-COLLECTION`)
+- `apps/web/src/pages/reference/` — `ReferenceListPage`, `ReferenceDetailPage`
+- `store/api/collectionsApi.ts`, `referenceApi.ts`
+- Homebrew detayda "Add to Collection" / "Remove" butonu
+- Sidebar: Reference link (`docs/06` §3)
+
+**Önkoşullar:**
+- [ ] İterasyon 4 Stop — homebrew FE yeşil
+- [ ] Collection + reference backend endpoint'leri çalışıyor
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §3.5
+2. `docs/06_SCREEN_CATALOG.md` §8.6 — `S-MY-COLLECTION`
+3. `docs/06_SCREEN_CATALOG.md` §9 — `S-REF-LIST`, `S-REF-DETAIL`
+4. `docs/05_FRONTEND_SPEC.md` §3 — route ağacı, public reference routes
+5. `docs/03_API_CONTRACTS.md` §9–11 — collection/reference response alanları
+
+**Uygulama planı:**
+1. `collectionsApi.ts` — `getCollection`, `addToCollection`, `removeFromCollection`; tag invalidation (`docs/06` §8.6)
+2. `referenceApi.ts` — tip bazlı list/detail endpoint'leri; public base query (auth optional)
+3. `MyCollectionPage` — `isUnpublished` rozeti; empty state + "Browse Gallery" CTA (`docs/06` §8.6)
+4. `ReferenceListPage` — `/reference`, `/reference/:type`; tip tabs; search/filter (`docs/06` §9.1)
+5. `ReferenceDetailPage` — `/reference/:type/:id`; `StatBlock` reuse (`docs/06` §9.2)
+6. `HomebrewDetailPage` güncelle — collection toggle (auth + verified); published only
+7. Vitest — collection empty state; reference list guest render
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Oluştur | `pages/collection/**`, `pages/reference/**`, `collectionsApi.ts`, `referenceApi.ts`, test dosyaları |
+| Güncelle | `routes/**`, sidebar nav, `HomebrewDetailPage.tsx` |
+| Dokunma | Seed tam veri (iter 6), optimizasyon (iter 7) |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| `S-MY-COLLECTION` protected | `docs/06` §8.6 | Auth + email verified |
+| Unpublish badge | `docs/06` §8.6 | `isUnpublished` → "Unpublished by author" |
+| `S-REF-LIST` misafir | `docs/06` §9.1 | Public route |
+| Reference breadcrumb | `docs/06` §9.2 | `Reference > Spells > Name` |
+| Add collection published only | `docs/03` §9 | FE disable draft; BE 404 backup |
+
+**Kalite kapıları:**
+- [ ] Vitest: unpublished badge render
+- [ ] Vitest: reference page without auth
+- [ ] `pnpm --filter web test -- --ci` yeşil
+- [ ] `pnpm --filter web build` yeşil
+- [ ] Manuel: misafir `/reference/spells` açılır
+
+**Bu iterasyonda yok:**
+- Tam 5e seed (iter 6) — liste boş/az kayıt olabilir
+- Arama index optimizasyonu (iter 7)
+- Character builder race/class dropdown wire (Faz 2 kapsamı)
+
+**Risk / dikkat:**
+- Collection butonu homebrew detayda — resmi PHB içeriğe de eklenebilir (published)
+- Reference classes/races API shared constants — ayrı seed gerekmez
+- Türkçe UI string yasak
+
+**Stop:**
+- [ ] `pnpm --filter web test -- --ci && pnpm --filter web build`
+- [ ] `pnpm lint && pnpm typecheck && pnpm test`
+- [ ] PR/onay → İterasyon 6
+
+---
+
+### İterasyon 6 — 5e seed data (3.6)
+
+**Hedef:** Tam resmi 5e JSON dosyaları `prisma/seed-data/` altında; seed script idempotent upsert ile tüm kayıtları yükler; Zod validasyonu geçmeyen kayıtlar skip + warn.
+
+**Teslim çıktısı:**
+- `apps/api/prisma/seed-data/spells.json` (~500+)
+- `monsters.json`, `feats.json`, `backgrounds.json`, `magic-items.json`, `subclasses.json`
+- `seed.ts` — tam döngü + Zod validasyon (iter 2 şemaları)
+- PR açıklamasında kayıt sayıları özeti
+
+**Önkoşullar:**
+- [ ] İterasyon 5 Stop — FE + BE yeşil
+- [ ] `packages/shared/schemas/homebrew/` tam ve export edilmiş (iter 2)
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §3.6
+2. `docs/02_DATABASE_SCHEMA.md` §5–6 — JSONB şema + seed format
+3. `docs/01_DOMAIN_MODEL.md` §7 — Source enum, resmi içerik `owner_id = null`
+4. `docs/04_BACKEND_SPEC.md` §7 — Zod şema import pattern
+5. `docs/09_DEV_WORKFLOW.md` §5 — seed komutları, idempotent doğrulama
+
+**Uygulama planı:**
+1. JSON dosyalarını `docs/02` §6.1 formatında hazırla veya mevcut kaynaklardan dönüştür (`name`, `type`, `source`, `description`, `data`)
+2. `seed.ts` — her kayıt için ilgili Zod şema `safeParse`; fail → `console.warn` + skip (`docs/02` §6.2)
+3. Upsert `where: { name_type_source: { name, type, source } }`; `status: PUBLISHED`, `ownerId: null`, `publishedAt` set
+4. `docker compose down -v` → `up -d` → `migrate deploy` → `db seed` — süre ve kayıt sayısı logla
+5. Smoke: `GET /reference/spells?limit=5` ve `GET /homebrew?source=PHB` API'den veri döner
+6. CI'da seed süresi kabul edilebilir — gerekirse batch upsert (`createMany` değil — upsert idempotent)
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Oluştur/Güncelle | `apps/api/prisma/seed-data/*.json`, `apps/api/prisma/seed.ts` |
+| Dokunma | API modül kodu (davranış değişmez), frontend, migration (şema değişikliği yok) |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| 6 JSON dosya tipi | `docs/02` §6.1 | spells, monsters, feats, backgrounds, magic-items, subclasses |
+| Idempotent upsert | `docs/02` §6.2 | Tekrar seed çift kayıt oluşturmaz |
+| Zod seed validasyon | `docs/02` §5 | Aynı şema FE/BE |
+| Resmi `owner_id` null | `docs/01` §7 | `ownerId: null` create |
+| `status: PUBLISHED` | `docs/01` §11 | Galeri + reference'da görünür |
+
+**Kalite kapıları:**
+- [ ] `docker compose down -v && docker compose up -d && pnpm --filter api prisma migrate deploy && pnpm --filter api prisma db seed` — hatasız
+- [ ] İkinci `db seed` — kayıt sayısı artmaz (idempotent)
+- [ ] `pnpm --filter api test -- --ci` yeşil (seed testleri kırılmamış)
+- [ ] Reference API smoke — en az 1 spell/monster döner
+
+**Bu iterasyonda yok:**
+- Classes/races JSON seed (shared constants — `docs/03` §11)
+- Seed verisi repo boyutu — `.gitattributes` LFS kararı yoksa JSON commit (MVP kabul)
+- Admin içerik düzenleme
+
+**Risk / dikkat:**
+- Büyük JSON → PR boyutu; parçalı commit veya sıkıştırma düşün (doc karar yok — mevcut pattern JSON commit)
+- Invalid kayıt skip — CI'da warn log review
+- Unique constraint ihlali — upsert where doğru olmalı
+
+**Stop:**
+- [ ] Full reset seed: `docker compose down -v && docker compose up -d && migrate deploy && db seed`
+- [ ] API smoke: reference + galeri PHB filtresi
+- [ ] `pnpm lint && pnpm typecheck && pnpm test`
+- [ ] PR/onay → İterasyon 7 (opsiyonel) veya Faz 3 Done
+
+---
+
+### İterasyon 7 — Stabilizasyon (3.7, opsiyonel)
+
+**Hedef:** Faz 3 çıktı kriterleri checklist'i yeşil; arama/filtre/sort performansı kabul edilebilir; CI stabil.
+
+**Teslim çıktısı:**
+- Gerekirse DB index ekleme migration (`homebrew_items` search/sort)
+- Test gap kapatma (homebrew + collection matris eksikleri)
+- Bug fix PR'ları (minimal diff)
+
+**Önkoşullar:**
+- [ ] İterasyon 6 Stop veya bilinen tek blocker listesi
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §3.7 + Faz 3 Çıktı Kriteri
+2. `docs/03_API_CONTRACTS.md` §1–2 — pagination/filter konvansiyonu
+3. `docs/10_IMPLEMENTATION_ROADMAP.md` Bölüm 9 — insan gate
+4. Blocker varsa ilgili spec bölümü only
+
+**Uygulama planı:**
+1. ILIKE `search` yavaşsa — `docs/02` index önerileri; `@@index` migration (`@42-add-prisma-migration`)
+2. `@46-fix-failing-test` — CI triage
+3. Manuel test bulguları — misafir galeri/reference, collection unpublish rozeti
+4. Eksik `homebrew.auth.spec.ts` / `collection.auth.spec.ts` hücreleri tamamla
+5. PR checklist: Faz 3 Done Definition maddeleri
+6. İnsan gate bekle — Faz 4 öncesi onay (`docs/10` Bölüm 9)
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Güncelle | Blocker dosyaları only (≤8 dosya); opsiyonel migration |
+| Dokunma | Yeni feature, Faz 4 admin/WS, Faz 2 campaign |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| Faz 3 çıktı kriterleri | `docs/10` Faz 3 checklist | PR body madde madde |
+| Misafir galeri gate | `docs/10` Bölüm 9 | Manuel doğrulama notu |
+| Cursor pagination | `docs/03` §1 | Offset pagination ekleme — yasak |
+| İnsan gate | `docs/10` Bölüm 9 | Agent merge/deploy yapmaz |
+
+**Kalite kapıları:**
+- [ ] `pnpm lint && pnpm typecheck && pnpm test` yeşil
+- [ ] `pnpm --filter web build && pnpm --filter api build` yeşil
+- [ ] GitHub Actions tüm job'lar yeşil
+- [ ] Full reset seed hatasız
+
+**Bu iterasyonda yok:**
+- Yeni endpoint/ekran
+- Full-text search engine
+- Faz 4 admin panel / WebSocket
+- Production deploy
+
+**Risk / dikkat:**
+- Scope creep — yalnızca stabilizasyon ve perf regresyon fix
+- Index migration production'da `migrate deploy` — `migrate dev` prod'da yasak
+
+**Stop:**
+- [ ] `docker compose down -v && docker compose up -d && pnpm --filter api prisma migrate deploy && pnpm --filter api prisma db seed`
+- [ ] Full gate: `pnpm lint && pnpm typecheck && pnpm test && build`
+- [ ] Faz 3 Done Definition checklist PR'da
+- [ ] **İnsan faz onayı bekle** — Faz 4 planlaması onay sonrası
+
+---
+
+## Required Context
+
+- `docs/10_IMPLEMENTATION_ROADMAP.md` Bölüm 5 + §3.1–§3.7 + Bölüm 8 (Faz 3 oturum tablosu)
+- `docs/mimari-kararlar.md` — `[CODE-004]` agent yasakları
+- İterasyon başına: yalnızca o iterasyonun **Docs okuma sırası** (yukarıda)
+- How-to: `@40-add-new-endpoint`, `@41-add-new-screen`, `@42-add-prisma-migration`, `@43-add-authorization-policy`, `@46-fix-failing-test`, `@48-git-phase-branch`
+
+## Done Definition
+
+- [ ] 6 `HomebrewType` create + shared Zod validasyon (`docs/01` §7)
+- [ ] Publish/unpublish state machine (`docs/01` §11)
+- [ ] `GET /homebrew` galeri 🔓 misafir; arama/filtre/sort/cursor (`docs/03` §8)
+- [ ] Collection add/remove; `isUnpublished` rozeti (`docs/03` §9)
+- [ ] Reference list/detail 🔓 misafir — tüm tipler (`docs/03` §11)
+- [ ] `S-HOMEBREW-*`, `S-MY-CREATIONS`, `S-MY-COLLECTION`, `S-REF-LIST`, `S-REF-DETAIL` (`docs/06`)
+- [ ] Seed idempotent; full reset yeşil (`docs/02` §6)
+- [ ] Homebrew + collection integration testleri (`docs/08` §5.4–5.4.2)
+- [ ] `policies/` coverage %100
+- [ ] CI pipeline yeşil (`docs/09` §7)
+- [ ] İnsan faz gate onayı (`docs/10` Bölüm 9)
+
+## Explicit Don'ts
+
+- Campaign, character, DM Screen, WebSocket, admin panel (Faz 2, 4)
+- Upload/presigned image (Faz 5)
+- Full-text search engine — ILIKE yeterli (`docs/00`)
+- Deaktive owner içerik gizleme (Faz 4 §6.5)
+- MFA, E2E Playwright, monetizasyon
+- Guard'sız yazma endpoint'i; raw SQL
+- `main`'e push; production deploy; faz geçişi onaysız
+- API body / ekran tablosunu bu `.mdc`'ye kopyalama
+- Path sapması: `/homebrew/:type` veya tekil `/collection` kullanma — `docs/03` kazanır
+
+---
+
+Phase done → `docs/10_IMPLEMENTATION_ROADMAP.md` Faz 3 insan gate; opsiyonel `@phase-controller` gap audit.

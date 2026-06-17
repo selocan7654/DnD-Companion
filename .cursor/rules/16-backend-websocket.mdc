@@ -1,0 +1,313 @@
+---
+description: WebSocket gateway — Socket.io, JWT handshake, campaign room join, live fields broadcast, Redis adapter. websocket/ düzenlemelerinde.
+globs:
+  - "apps/api/src/websocket/**"
+---
+
+# DnD Companion — Backend WebSocket
+
+Real-time kapsam **dar**: yalnızca DM Screen live fields (HP, temp HP, conditions, death saves) + campaign member join/leave bildirimleri. Dice, initiative, combat tracker MVP dışı.
+
+Transport: Socket.io via `@nestjs/websockets`. Contract → `docs/03_API_CONTRACTS.md` Bölüm 14; güvenlik → `docs/07` Bölüm 6.
+
+## Modül Yapısı
+
+```
+websocket/
+  websocket.module.ts    # Redis adapter init
+  websocket.gateway.ts   # Connection, rooms, broadcast helpers
+  websocket.guard.ts     # Opsiyonel message-level guard
+```
+
+Gateway export edilir; `CharactersService` live PATCH sonrası `broadcastLiveUpdate` çağırır.
+
+## Handshake Authentication [AUTH-004]
+
+Client access token'ı `auth` objesinde gönderir:
+
+```typescript
+// Client (referans)
+io(url, { auth: { token: accessToken } });
+```
+
+```typescript
+// ✓ Doğru — handleConnection
+async handleConnection(client: Socket) {
+  try {
+    const token = client.handshake.auth?.token;
+    if (!token) throw new Error('No token');
+
+    const payload = this.jwtService.verify(token, { secret: process.env.JWT_ACCESS_SECRET });
+    const user = await this.prisma.user.findUnique({
+      where: { id: payload.sub },
+      select: { id: true, username: true, role: true, isActive: true },
+    });
+    if (!user || !user.isActive) throw new Error('Invalid user');
+
+    client.data.userId = user.id;
+    client.data.username = user.username;
+    client.data.role = user.role;
+  } catch {
+    client.disconnect(true);
+  }
+}
+
+// ✗ Yanlış — token doğrulamadan room join'e izin
+async handleConnection(client: Socket) {
+  client.data.userId = client.handshake.query.userId;
+}
+```
+
+Token yok/geçersiz → anında disconnect. HTTP `401` yok — WS pattern.
+
+## Room Modeli
+
+Room adı: `campaign:<campaignId>` (kebab-case event adları, room prefix colon).
+
+Client otomatik tüm room'lara girmez — explicit `join-campaign`.
+
+## Room Join Authorization
+
+```typescript
+// ✓ Doğru — join-campaign handler
+@SubscribeMessage('join-campaign')
+async handleJoinCampaign(client: Socket, payload: { campaignId: string }) {
+  const userId = client.data.userId;
+  if (!userId) return;
+
+  const campaign = await this.prisma.campaign.findUnique({
+    where: { id: payload.campaignId },
+    include: { members: { select: { userId: true } } },
+  });
+
+  if (!campaign) {
+    client.emit('error', {
+      event: 'join-campaign',
+      message: 'Campaign not found',
+      code: 'NOT_FOUND',
+    });
+    return;
+  }
+
+  const isMember =
+    campaign.ownerId === userId ||
+    campaign.members.some((m) => m.userId === userId) ||
+    client.data.role === Role.ADMIN;
+
+  if (!isMember) {
+    client.emit('error', {
+      event: 'join-campaign',
+      message: 'Not a member of this campaign',
+      code: 'FORBIDDEN',
+    });
+    return;
+  }
+
+  client.join(`campaign:${payload.campaignId}`);
+  client.emit('joined-campaign', { campaignId: payload.campaignId });
+}
+
+// ✗ Yanlış — üyelik kontrolü olmadan join
+client.join(`campaign:${payload.campaignId}`);
+```
+
+DM = `ownerId`; `campaign_members` DM içermez — owner check zorunlu.
+
+## Event İsimlendirme
+
+Client → Server (kebab-case):
+
+| Event | Payload |
+| --- | --- |
+| `join-campaign` | `{ campaignId: string }` |
+| `leave-campaign` | `{ campaignId: string }` |
+
+Server → Client (room broadcast):
+
+| Event | Açıklama |
+| --- | --- |
+| `character:live-update` | Live field değişimi |
+| `campaign:member-joined` | Yeni üye |
+| `campaign:member-left` | Üye ayrıldı |
+
+```typescript
+// ✓ Doğru — colon namespace server event
+this.server.to(`campaign:${campaignId}`).emit('character:live-update', payload);
+
+// ✗ Yanlış — camelCase event
+this.server.emit('characterLiveUpdate', payload);
+```
+
+## character:live-update Payload
+
+Tek alan veya toplu `fields` objesi — spec ikisini de kabul eder; tercih toplu (daha az event).
+
+```typescript
+// Tercih edilen toplu format
+{
+  characterId: string;
+  characterName: string;
+  fields: {
+    hitPointsCurrent?: number;
+    temporaryHitPoints?: number;
+    conditions?: string[];
+    deathSaves?: { successes: number; failures: number };
+  };
+  updatedBy: string; // username
+}
+```
+
+Live update REST kaynağı: `PATCH /characters/:id/live` — persist DB + gateway broadcast. WS tek başına source of truth değil.
+
+## leave-campaign ve Disconnect
+
+```typescript
+@SubscribeMessage('leave-campaign')
+handleLeaveCampaign(client: Socket, payload: { campaignId: string }) {
+  client.leave(`campaign:${payload.campaignId}`);
+}
+```
+
+`handleDisconnect`: Socket.io otomatik room cleanup — ek iş gerekmez.
+
+## Broadcast Helper'ları (Service API)
+
+Gateway method'ları DI ile service'lere açılır:
+
+```typescript
+broadcastLiveUpdate(campaignId: string, data: LiveUpdatePayload): void {
+  this.server.to(`campaign:${campaignId}`).emit('character:live-update', data);
+}
+
+broadcastMemberJoined(campaignId: string, data: MemberPayload): void {
+  this.server.to(`campaign:${campaignId}`).emit('campaign:member-joined', data);
+}
+```
+
+Invite join service → `broadcastMemberJoined` after member insert.
+
+## Token Expiry [SEC-004]
+
+Access token 15 dk. Client:
+1. Refresh HTTP → yeni token
+2. WS disconnect + reconnect yeni token ile
+
+Opsiyonel: `reauthenticate` event (spec'te alternatif) — gateway token yeniden verify eder.
+
+Gateway per-message JWT re-verify **yok** (performans); reconnect sorumluluğu client'ta.
+
+## Redis Adapter (Horizontal Scale)
+
+Çok instance WS için `@socket.io/redis-adapter`:
+
+```typescript
+// websocket.module.ts / gateway afterInit
+async afterInit(server: Server) {
+  const pubClient = createClient({ url: process.env.REDIS_URL });
+  const subClient = pubClient.duplicate();
+  await Promise.all([pubClient.connect(), subClient.connect()]);
+  server.adapter(createAdapter(pubClient, subClient));
+}
+```
+
+Broadcast `server.to(room)` tüm instance'lara yayılır. Redis yoksa single-instance lokal dev yeterli.
+
+## CORS
+
+Gateway CORS: `origin: process.env.FRONTEND_URL`, `credentials: true` — HTTP ile uyumlu.
+
+## Hata Handling (WS)
+
+HTTP exception filter WS'ye uygulanmaz. Hata → client-specific `error` event:
+
+```typescript
+client.emit('error', { event: '<source-event>', message: '...', code: 'FORBIDDEN' });
+```
+
+Room broadcast hatalarında tüm room'a error yayınlama — yalnızca istek yapan client.
+
+## Güvenlik Checklist
+
+```
+[ ] Handshake JWT verify
+[ ] isActive user check
+[ ] join-campaign membership verify (owner | member | ADMIN)
+[ ] Room adı campaignId ile scoped
+[ ] Live update yalnızca yetkili REST path'ten tetiklenir
+[ ] Token/log handshake'te loglanmıyor
+[ ] CORS origin allowlist (wildcard yok)
+```
+
+## Test
+
+Integration: mock Socket.io client veya gateway unit test:
+- Invalid token → disconnect
+- Non-member join → error event, not in room
+- Member join → `joined-campaign`
+- Broadcast sadece room üyelerine
+
+## websocket.module.ts
+
+```typescript
+@Module({
+  imports: [PrismaModule, JwtModule],
+  providers: [WebsocketGateway],
+  exports: [WebsocketGateway],
+})
+export class WebsocketModule {}
+```
+
+`CharactersModule` / `CampaignsModule` → `imports: [WebsocketModule]`.
+
+## Gateway DI ve Test
+
+Gateway unit test: mock `Server`, mock `Socket`, jest.fn() emit/to. Integration: supertest + socket.io-client (opsiyonel, ağır).
+
+## Live Update Yetkisi (REST Tarafı)
+
+`PATCH /characters/:id/live` — `CharacterPolicy` write veya dedicated `canUpdateLiveFields` (owner veya campaign DM). Gateway broadcast yalnızca başarılı DB update sonrası.
+
+## Member Events Tetikleyicileri
+
+| Kaynak | Event |
+| --- | --- |
+| `InviteService.join` success | `campaign:member-joined` |
+| `MembersService.remove` | `campaign:member-left` |
+| User disconnect | — (otomatik room leave) |
+
+## Ölçek Notu
+
+Redis adapter yalnızca multi-instance deploy'da zorunlu. Lokal tek process: adapter skip edilebilir.
+
+## WS vs HTTP Auth Farkı
+
+| | HTTP | WebSocket |
+| --- | --- | --- |
+| Token taşıma | Authorization header | handshake.auth.token |
+| Expired token | 401 response | disconnect |
+| Refresh | POST /auth/refresh | reconnect |
+
+## MVP Dışı WS Özellikleri
+
+Yazma yasak: dice roller, initiative tracker, chat, presence, typing indicator. Yalnızca spec'teki 5 event.
+
+## Monitoring
+
+WS connection count metrik (opsiyonel). Error disconnect rate log — PII yok.
+
+## Anti-pattern'ler
+
+- ❌ Query string'den `userId` alıp güvenme
+- ❌ join'de campaign membership skip
+- ❌ WS üzerinden DB yazma (read-only gateway; write REST'te)
+- ❌ camelCase event adları
+- ❌ Tüm connected client'lara global broadcast (room bypass)
+- ❌ Refresh token WS handshake'te
+- ❌ Post-MVP event (dice roll, initiative) ekleme
+- ❌ Gateway içinde business policy tekrarı — membership sorgusu join için minimum
+- ❌ `character:live-update` DB persist olmadan emit
+- ❌ CORS `origin: '*'` production'da
+
+---
+
+Detay: `docs/04_BACKEND_SPEC.md` Bölüm 9; `docs/03_API_CONTRACTS.md` Bölüm 14; `docs/07_SECURITY_IMPLEMENTATION.md` Bölüm 6; `docs/mimari-kararlar.md` [AUTH-004], [SEC-004]
