@@ -1,6 +1,6 @@
-import type { Config } from 'jest';
-
-const config: Config = {
+/* eslint-env node */
+/** @type {import('jest').Config} */
+const config = {
   moduleFileExtensions: ['js', 'json', 'ts'],
   rootDir: '.',
   testRegex: '.*\\.spec\\.ts$',
@@ -12,4 +12,4 @@ const config: Config = {
   testEnvironment: 'node',
 };
 
-export default config;
+module.exports = config;

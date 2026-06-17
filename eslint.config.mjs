@@ -12,6 +12,7 @@ export default tseslint.config(
       '**/coverage/**',
       '**/node_modules/**',
       '**/.husky/**',
+      'apps/api/jest.config.js',
       'pnpm-lock.yaml',
     ],
   },
