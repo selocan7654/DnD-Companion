@@ -1,0 +1,645 @@
+---
+description: '[Faz 2] Campaign ve Karakter CRUD — 8 iterasyon/chat (prisma → campaign BE → character BE → dm-notes BE → campaign FE → builder FE → char list/detail → stabilizasyon). Mesajda "Faz 2 — İterasyon M" belirt.'
+---
+
+# Faz 2: Campaign ve Karakter CRUD
+
+## Goal
+
+DM campaign oluşturur, davet eder ve üye yönetir; oyuncu character builder ile karakter oluşturur ve campaign'e atar; visibility ve ownership kuralları backend policy + integration test ile kapsanır. Detaylı kapsam: `docs/10_IMPLEMENTATION_ROADMAP.md` Bölüm 4.
+
+## Feature branch (zorunlu)
+
+`48-git-phase-branch.mdc` prosedürünü uygula. **Faz 1 insan gate onayı + merge sonrası** `main`'den feature branch aç; her iterasyon merge sonrası yeni branch.
+
+| İterasyon | Chat opener | Branch örneği |
+| --- | --- | --- |
+| 1 | `Faz 2 — İterasyon 1: Prisma campaign/character schema` | `feat/faz2-prisma-campaign-character` |
+| 2 | `Faz 2 — İterasyon 2: Campaign backend` | `feat/faz2-campaign-backend` |
+| 3 | `Faz 2 — İterasyon 3: Character backend` | `feat/faz2-character-backend` |
+| 4 | `Faz 2 — İterasyon 4: DM Notes backend` | `feat/faz2-dm-notes-backend` |
+| 5 | `Faz 2 — İterasyon 5: Campaign frontend` | `feat/faz2-campaign-frontend` |
+| 6 | `Faz 2 — İterasyon 6: Character builder` | `feat/faz2-character-builder` |
+| 7 | `Faz 2 — İterasyon 7: Character list/detail` | `feat/faz2-character-pages` |
+| 8 | `Faz 2 — İterasyon 8: Stabilizasyon` | `fix/faz2-auth-matrix-stabilization` |
+
+**Yasak:** `main`'e doğrudan push; bir PR'da birden fazla iterasyon.
+
+## Bu fazın çalışma modeli
+
+- Tek sohbet fazı bitirmez — 8 ayrı chat ≈ 8 PR (iter 8 opsiyonel).
+- Her chat: `@51-phase-02-campaign-character` + **「Faz 2 — İterasyon M」** + `48-git-phase-branch`.
+- Agent **yalnızca o iterasyonun Docs okuma sırasını** okur; tüm spec değil.
+- **Plan moduna geçme** — aşağıdaki iterasyon blueprint yeterli.
+- Yetki değişikliği → `@43-add-authorization-policy` + integration test **aynı PR'da zorunlu**.
+- Spec tek kaynak: `docs/`; API body / ekran alan tablosu bu dosyada **kopyalanmaz**.
+
+---
+
+### İterasyon 1 — Prisma genişletme (2.1)
+
+**Hedef:** `campaigns`, `campaign_members`, `characters`, `dm_notes` tabloları migration ile oluşur; `packages/shared` character/campaign Zod tipleri export edilir; seed idempotent kalır.
+
+**Teslim çıktısı:**
+- `apps/api/prisma/schema.prisma` — dört yeni model + ilişkiler
+- `apps/api/prisma/migrations/*-faz2-campaign-character/` migration dosyası
+- `packages/shared/src/schemas/campaign.ts`, `schemas/character.ts` (Zod + JSONB alt şemaları)
+
+**Önkoşullar:**
+- [ ] Faz 1 Done — auth çalışır, `users`/`refresh_tokens` migration uygulanmış
+- [ ] `48-git-phase-branch` — `feat/faz2-prisma-campaign-character` branch açılmış
+- [ ] `docker compose up -d` — Postgres erişilebilir
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §2.1 — iterasyon kapsamı
+2. `docs/02_DATABASE_SCHEMA.md` §3.2–3.7 — tablo, index, FK, enum
+3. `docs/01_DOMAIN_MODEL.md` §4–6, §8 (DmNote) — entity alanları ve iş kuralları
+4. `docs/09_DEV_WORKFLOW.md` §2 — migrate komutları
+5. `docs/03_API_CONTRACTS.md` §5, §7, §10 — DTO alan adları (camelCase response uyumu)
+
+**Uygulama planı:**
+1. `schema.prisma` — `Campaign`, `CampaignMember`, `Character`, `DmNote`; `CharacterVisibility` enum (`docs/02` §3.4)
+2. FK/index: `campaigns_owner_id_idx`, `characters_owner_id_idx`, `dm_notes_campaign_id_sort_idx` (`docs/02` §3)
+3. `pnpm --filter api prisma migrate dev --name faz2-campaign-character` (`@42-add-prisma-migration`)
+4. `packages/shared` — `createCampaignSchema`, `updateCampaignSchema`, `characterSheetSchema` (ability_scores, hp, skills JSONB) (`docs/01` §6)
+5. Prisma seed **değiştirme** — yalnızca Faz 1 admin upsert kalır; campaign fixture iter 2 test factory'de
+6. `pnpm --filter api prisma migrate deploy` smoke — CI uyumu
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Oluştur | `apps/api/prisma/migrations/*`, `packages/shared/src/schemas/campaign.ts`, `schemas/character.ts` |
+| Güncelle | `apps/api/prisma/schema.prisma`, `packages/shared/src/index.ts` (export) |
+| Dokunma | `campaigns/` modülü, `characters/` modülü, frontend (§2.2+) |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| `campaign_members` composite PK | `docs/02` §3.3 | `@@id([campaignId, userId])` |
+| `characters.campaign_id` nullable | `docs/02` §3.4 | ON DELETE SET NULL |
+| `visibility` default PRIVATE | `docs/01` §6 | Prisma `@default(PRIVATE)` |
+| `dm_notes.sort_order` | `docs/02` §3.7 | int, reorder iter 4'te |
+
+**Kalite kapıları:**
+- [ ] `pnpm --filter api prisma migrate dev` başarılı (lokal)
+- [ ] `pnpm --filter api prisma db seed` — hatasız, idempotent
+- [ ] `pnpm lint && pnpm typecheck` yeşil
+- [ ] Shared Zod `safeParse` örnek fixture — unit smoke (opsiyonel tek test)
+
+**Bu iterasyonda yok:**
+- NestJS controller/service, policy fonksiyonları
+- Frontend route veya RTK Query
+- Reference/homebrew tabloları (Faz 3)
+
+**Risk / dikkat:**
+- JSONB alanları Prisma `Json` — TS tipi `packages/shared` Zod'dan türet
+- `class_name` DB snake_case (`class_name`) → TS `className` Prisma `@map`
+- Roadmap §4.2 eski `/api` path — **docs/03 `/api/v1` kazanır**
+
+**Stop:**
+- [ ] `docker compose up -d && pnpm --filter api prisma migrate dev && pnpm --filter api prisma db seed`
+- [ ] `pnpm lint && pnpm typecheck && pnpm test`
+- [ ] PR/onay → İterasyon 2
+
+---
+
+### İterasyon 2 — Campaign backend (2.2)
+
+**Hedef:** Campaign CRUD, invite regenerate/disable, members list/remove, invite join çalışır; `CampaignPolicy` + campaign integration test matrisi yeşil.
+
+**Teslim çıktısı:**
+- `apps/api/src/campaigns/` — module, controller, service, DTO'lar
+- `apps/api/src/common/policies/campaign.policy.ts` + `campaign.policy.spec.ts`
+- `apps/api/test/factories/campaign.factory.ts`
+- `apps/api/src/campaigns/campaigns.controller.spec.ts` — supertest integration
+
+**Önkoşullar:**
+- [ ] İterasyon 1 Stop — Faz 2 migration uygulanmış
+- [ ] Faz 1 auth integration testleri yeşil (`loginAsUser` helper mevcut)
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §2.2
+2. `docs/03_API_CONTRACTS.md` §5–6 — campaign + invite endpoint'leri
+3. `docs/07_SECURITY_IMPLEMENTATION.md` §5 — Campaign yetki matrisi, 404/403
+4. `docs/04_BACKEND_SPEC.md` §5–6 — policy pattern, ince controller
+5. `docs/08_TESTING_STRATEGY.md` §2–4 — integration iskelet, policy %100 coverage
+
+**Uygulama planı:**
+1. `CampaignPolicy` — `canRead`, `canUpdate`, `canDelete`, `canManageInvite`, `canRemoveMember`; ADMIN bypass ilk satır (`@43-add-authorization-policy`)
+2. DTO'lar — `CreateCampaignDto`, `UpdateCampaignDto`, `ListQueryDto` (`docs/03` §5; `@40-add-new-endpoint`)
+3. `CampaignsService` — CRUD, cursor pagination, yetkisiz read → `NotFoundException` (`docs/07` §5)
+4. Invite: `regenerateInviteToken` (crypto random), `disableInvite` (`invite_token = null`); join `POST /invite/:token/join` — `AlreadyMemberException` 409 (`docs/03` §6)
+5. Members: `GET …/members` (username + avatarUrl; email yok); `DELETE …/members/:userId` — DM veya self-leave; side effect `characters.campaign_id = null` (`docs/03` §5)
+6. `CampaignsController` — `EmailVerifiedGuard` yazma endpoint'lerinde; global `JwtAuthGuard`
+7. `campaign.policy.spec.ts` — owner/member/outsider/ADMIN dalları (`docs/08` §2)
+8. `campaigns.controller.spec.ts` — deny: outsider GET 404; member PATCH 403; join duplicate 409
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Oluştur | `apps/api/src/campaigns/**`, `common/policies/campaign.policy.ts`, `campaign.policy.spec.ts`, `campaigns.controller.spec.ts`, `test/factories/campaign.factory.ts` |
+| Güncelle | `apps/api/src/app.module.ts`, `jest.config.ts` (`policies/` %100 threshold) |
+| Dokunma | `characters/` modülü, `dm-notes/` (§2.4), campaign frontend (§2.5) |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| Campaign list DM + member | `docs/03` §5 GET `/campaigns` | OR query owner_id + members |
+| Outsider read campaign | `docs/07` §5 | 404 — existence leak yok |
+| Invite join verified user | `docs/03` §6 POST join | `EmailVerifiedGuard` |
+| Delete cascade | `docs/03` §5 DELETE | members + dm_notes cascade; characters SET NULL |
+| Member email gizli | `docs/07` §13 | response'ta yalnızca username |
+
+**Kalite kapıları:**
+- [ ] Integration: DM create → regenerate invite → player join → member list
+- [ ] Deny: outsider read 404; member update 403; unverified create 403
+- [ ] `campaign.policy.spec.ts` — branch coverage %100
+- [ ] `pnpm --filter api test -- --ci --coverage` yeşil
+- [ ] `pnpm lint && pnpm typecheck` yeşil
+
+**Bu iterasyonda yok:**
+- DM notes endpoint'leri (§2.4)
+- Character CRUD (§2.3)
+- `PATCH /characters/:id/live`, WebSocket (Faz 4)
+
+**Risk / dikkat:**
+- DM `campaign_members`'a eklenmez — owner zaten implicit member (`docs/01` §5)
+- `invite_token` unique nullable — disable = NULL, regenerate = new token
+- Controller içinde policy if zinciri **yasak** — service'de policy çağrısı
+
+**Stop:**
+- [ ] `docker compose up -d && pnpm --filter api prisma migrate deploy`
+- [ ] `pnpm --filter api test -- campaigns.controller.spec campaign.policy.spec --ci`
+- [ ] `pnpm lint && pnpm typecheck && pnpm test`
+- [ ] PR/onay → İterasyon 3
+
+---
+
+### İterasyon 3 — Character backend (2.3)
+
+**Hedef:** Character CRUD, `PATCH …/campaign`, `PATCH …/visibility` çalışır; `CharacterPolicy` + character integration testleri yeşil.
+
+**Teslim çıktısı:**
+- `apps/api/src/characters/` — module, controller, service, DTO'lar
+- `apps/api/src/common/policies/character.policy.ts` + `character.policy.spec.ts`
+- `apps/api/test/factories/character.factory.ts`
+- `apps/api/src/characters/characters.controller.spec.ts`
+
+**Önkoşullar:**
+- [ ] İterasyon 2 Stop — campaign API + invite join çalışır
+- [ ] Test factory: iki kullanıcı + bir campaign + member ilişkisi kurulabilir
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §2.3
+2. `docs/03_API_CONTRACTS.md` §7 — character endpoint'leri (assign → `/campaign`)
+3. `docs/07_SECURITY_IMPLEMENTATION.md` §5 — Character visibility matrisi
+4. `docs/01_DOMAIN_MODEL.md` §6 — ownership, campaign assignment kuralları
+5. `docs/08_TESTING_STRATEGY.md` §2–4 — policy + integration beklentisi
+
+**Uygulama planı:**
+1. `CharacterPolicy` — `canRead`, `canUpdate`, `canDelete`, `canAssignCampaign`, `canChangeVisibility` (`@43-add-authorization-policy`)
+2. `CharactersService` — create (verified user), list own only (`owner_id`), get with visibility rules
+3. `PATCH /characters/:id` — partial update; JSONB alanları shared Zod `safeParse` (`docs/04` §validation)
+4. `PATCH /characters/:id/campaign` — body `{ campaignId: uuid \| null }`; 409 zaten atanmış; 403 üye değil (`docs/03` §7)
+5. `PATCH /characters/:id/visibility` — owner only; PUBLIC/PRIVATE (`docs/03` §7)
+6. DM update: campaign owner karakter sheet'ini düzenleyebilir (`docs/07` §5)
+7. Response: `ownerUsername`, `ownerAvatarUrl` — `email` yok (`docs/07` §13)
+8. Integration test matrisi: PUBLIC misafir read; PRIVATE outsider 404; member reads assigned; DM edits assigned
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Oluştur | `apps/api/src/characters/**`, `common/policies/character.policy.ts`, `character.policy.spec.ts`, `characters.controller.spec.ts`, `test/factories/character.factory.ts` |
+| Güncelle | `apps/api/src/app.module.ts` |
+| Dokunma | `dm-notes/` (§2.4), `PATCH …/live` (Faz 4), character frontend (§2.5+) |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| GET list own characters | `docs/03` §7 GET `/characters` | `where: { ownerId: user.id }` |
+| PUBLIC read guest | `docs/03` §7 GET `/:id` | `@Public()` veya optional auth guard |
+| Campaign assign membership | `docs/01` §6 | user campaign member veya owner |
+| Already in campaign 409 | `docs/03` §7 PATCH campaign | reassign önce null |
+| DM edit assigned char | `docs/07` §5 | `canUpdate` owner OR campaign.ownerId |
+
+**Kalite kapıları:**
+- [ ] Integration: create → assign campaign → DM patch → unassign
+- [ ] Deny: outsider PRIVATE 404; non-member assign 403; member visibility change 403
+- [ ] `character.policy.spec.ts` — %100 branch
+- [ ] `pnpm --filter api test -- characters.controller.spec character.policy.spec --ci`
+- [ ] `pnpm lint && pnpm typecheck` yeşil
+
+**Bu iterasyonda yok:**
+- `PATCH /characters/:id/live` ve WebSocket emit (Faz 4)
+- DM notes (§2.4)
+- Frontend builder (§2.6)
+
+**Risk / dikkat:**
+- PUBLIC karakter `@Public()` GET — hâlâ validation; rate limit global
+- JSONB merge vs replace — PATCH partial; `docs/03` §7 örnekleri
+- Deaktive owner içeriği normal kullanıcıdan gizli ([AP-002]) — list/query filter
+
+**Stop:**
+- [ ] `pnpm --filter api test -- characters.controller.spec character.policy.spec --ci`
+- [ ] `pnpm lint && pnpm typecheck && pnpm test`
+- [ ] PR/onay → İterasyon 4
+
+---
+
+### İterasyon 4 — DM Notes backend (2.4)
+
+**Hedef:** DM notes CRUD + reorder çalışır; yalnızca campaign owner (DM) yazabilir; integration testler yeşil.
+
+**Teslim çıktısı:**
+- `apps/api/src/campaigns/dm-notes/` — controller, service
+- `apps/api/src/common/policies/dm-note.policy.ts` + `dm-note.policy.spec.ts`
+- `apps/api/src/campaigns/dm-notes/dm-notes.controller.spec.ts`
+
+**Önkoşullar:**
+- [ ] İterasyon 3 Stop — character API çalışır
+- [ ] `CampaignPolicy.canUpdate` (owner) mevcut — DM note policy buna dayanır
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §2.4
+2. `docs/03_API_CONTRACTS.md` §10 — dm-notes endpoint'leri
+3. `docs/07_SECURITY_IMPLEMENTATION.md` §5 — DM-only write
+4. `docs/04_BACKEND_SPEC.md` §1 — `campaigns/dm-notes/` alt modül yapısı
+5. `docs/08_TESTING_STRATEGY.md` §4 — integration deny senaryoları
+
+**Uygulama planı:**
+1. `DmNotePolicy` — `canRead`, `canWrite` → campaign `ownerId === user.id`; ADMIN bypass (`@43-add-authorization-policy`)
+2. `DmNotesService` — create (auto `sort_order` = max+1), list ordered by `sort_order`, update title/content
+3. `DELETE` — hard delete tek not
+4. `PATCH …/dm-notes/reorder` — body `{ orderedIds: uuid[] }`; transaction ile `sort_order` güncelle (`docs/03` §10)
+5. Member `GET` dm-notes → 404 (veya 403 — spec'te DM-only list; **404 tercih** existence leak için)
+6. Controller route prefix: `campaigns/:campaignId/dm-notes` (`docs/03` §10)
+7. Integration: DM CRUD + reorder; member GET 404; outsider POST 404
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Oluştur | `apps/api/src/campaigns/dm-notes/**`, `common/policies/dm-note.policy.ts`, `dm-note.policy.spec.ts`, `dm-notes.controller.spec.ts` |
+| Güncelle | `apps/api/src/campaigns/campaigns.module.ts` (dm-notes register) |
+| Dokunma | Campaign/character FE (§2.5+), DM Screen WS (Faz 4) |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| List sort_order ASC | `docs/03` §10 GET | `orderBy: { sortOrder: 'asc' }` |
+| Reorder atomic | `docs/03` §10 PATCH reorder | `$transaction` |
+| DM-only write | `docs/07` §5 | member → 403 veya 404 read |
+| Cascade on campaign delete | `docs/02` §3.7 | FK ON DELETE CASCADE |
+| Title required | `docs/03` §10 POST | DTO `@IsNotEmpty()` |
+
+**Kalite kapıları:**
+- [ ] Integration: DM create 3 notes → reorder → delete one
+- [ ] Deny: campaign member list/read 404; outsider 404
+- [ ] `dm-note.policy.spec.ts` — %100 branch
+- [ ] `pnpm --filter api test -- dm-notes.controller.spec dm-note.policy.spec --ci`
+- [ ] `pnpm lint && pnpm typecheck` yeşil
+
+**Bu iterasyonda yok:**
+- DM Screen frontend not paneli (Faz 4 — bu iterasyonda yalnızca REST)
+- Campaign/character frontend (§2.5+)
+
+**Risk / dikkat:**
+- Reorder validation: `orderedIds` tam küme olmalı — aksi 400
+- Campaign silinince notlar cascade — integration'da assert
+
+**Stop:**
+- [ ] `pnpm --filter api test -- dm-notes.controller.spec dm-note.policy.spec --ci`
+- [ ] `pnpm lint && pnpm typecheck && pnpm test`
+- [ ] PR/onay → İterasyon 5
+
+---
+
+### İterasyon 5 — Campaign frontend (2.5)
+
+**Hedef:** Campaign list/create/detail/edit + invite accept (`S-INVITE`) uçtan uca çalışır; `campaignsApi` RTK Query tag invalidation doğru.
+
+**Teslim çıktısı:**
+- `apps/web/src/pages/campaigns/*`, `pages/invite/InvitePage.tsx`
+- `apps/web/src/features/campaigns/*` (InviteLinkManager, MemberList, …)
+- `apps/web/src/store/api/campaignsApi.ts`
+- Route'lar: `/my-campaigns`, `/campaigns/new`, `/campaigns/:id`, `/campaigns/:id/edit`, `/invite/:token`
+- Vitest: form validation, DM-only invite button koşullu render
+
+**Önkoşullar:**
+- [ ] İterasyon 4 Stop — tüm campaign/dm-notes API yeşil
+- [ ] `pnpm --filter api dev` + auth login smoke OK
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §2.5
+2. `docs/06_SCREEN_CATALOG.md` §5.1–5.5 — `S-CAMPAIGN-*`, `S-INVITE`
+3. `docs/05_FRONTEND_SPEC.md` §3, §4 — route ağacı, RTK Query pattern
+4. `docs/03_API_CONTRACTS.md` §5–6 — FE'nin çağıracağı endpoint'ler
+5. `docs/08_TESTING_STRATEGY.md` §6 — component test beklentisi
+
+**Uygulama planı:**
+1. `campaignsApi.ts` — `getCampaigns`, `getCampaign`, `createCampaign`, `updateCampaign`, `deleteCampaign`, invite regenerate/disable, members, join (`docs/05` §4 campaignsApi örneği; `@41-add-new-screen`)
+2. `S-CAMPAIGN-LIST` — `/my-campaigns`; DM/Player rozet; cursor pagination; empty state (`docs/06` §5.1)
+3. `S-CAMPAIGN-CREATE` / `S-CAMPAIGN-EDIT` — RHF + shared Zod; `EmailVerifiedGuard` 403 toast (`docs/06` §5.2, §5.4)
+4. `S-CAMPAIGN-DETAIL` — üye listesi, atanmış karakterler (read-only link), DM-only InviteLinkManager (`docs/06` §5.3)
+5. `S-INVITE` — `GET` preview + confirm join; zaten üye redirect (`docs/06` §5.5)
+6. Sidebar nav — "My Campaigns" link (`docs/06` §2)
+7. App route guard — verified email required (`ProtectedRoute` + verification check)
+8. Vitest: create form validation; invite manager hidden for non-DM
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Oluştur | `apps/web/src/pages/campaigns/*`, `pages/invite/*`, `features/campaigns/*`, `store/api/campaignsApi.ts`, `*.test.tsx` |
+| Güncelle | `apps/web/src/App.tsx`, `layouts/AppLayout.tsx` (nav), `store/index.ts` |
+| Dokunma | Character pages (§2.6–2.7), DM Screen route (Faz 4), dm-notes UI detayı (Faz 4) |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| `S-CAMPAIGN-LIST` route | `docs/06` §5.1 | `/my-campaigns` (S-* route sütunu) |
+| Invite copy URL | `docs/06` §5.3 | `inviteUrl` from regenerate response |
+| Member remove DM only | `docs/06` §5.3 | conditional render ownerId === user.id |
+| Join success redirect | `docs/06` §5.5 | `navigate(/campaigns/:id)` |
+| UI English only | `docs/00` Bölüm 9 | toast/button labels |
+
+**Kalite kapıları:**
+- [ ] Vitest: campaign create form validation errors (English)
+- [ ] Vitest: non-DM does not see invite regenerate
+- [ ] `pnpm --filter web test -- --ci` yeşil
+- [ ] `pnpm --filter web build` yeşil
+- [ ] Manuel smoke: create → invite → join (ikinci kullanıcı)
+
+**Bu iterasyonda yok:**
+- DM notes UI CRUD (Faz 4 DM Screen veya detay genişletme — REST hazır §2.4)
+- Character builder/list (§2.6–2.7)
+- `/campaigns/:id/dm-screen` (Faz 4)
+
+**Risk / dikkat:**
+- `docs/05` §3 `/campaigns` list route — **docs/06 `/my-campaigns` kazanır** (S-* route)
+- RTK tag: `Campaign`, `CampaignMember` invalidation on mutate (`docs/05` §4)
+- a11y: invite copy button `aria-label`, member list keyboard (`25-frontend-a11y`)
+
+**Stop:**
+- [ ] `pnpm --filter api dev` + `pnpm --filter web dev` — campaign akışı smoke
+- [ ] `pnpm --filter web test -- --ci`
+- [ ] `pnpm lint && pnpm typecheck && pnpm test`
+- [ ] PR/onay → İterasyon 6
+
+---
+
+### İterasyon 6 — Character builder (2.6)
+
+**Hedef:** `S-CHAR-BUILDER` çok tablı form çalışır; yeni karakter POST → URL replace → debounced PATCH auto-save; race/class/background serbest metin Input.
+
+**Teslim çıktısı:**
+- `apps/web/src/pages/characters/CharacterBuilderPage.tsx`
+- `apps/web/src/features/characters/builder/*` (tab bileşenleri, `useAutoSave`)
+- `apps/web/src/store/api/charactersApi.ts` (create + patch minimum)
+- Route: `/characters/new`, `/characters/:id/builder`
+
+**Önkoşullar:**
+- [ ] İterasyon 5 Stop — campaign FE smoke OK
+- [ ] Character backend §2.3 merge — POST/PATCH API ayakta
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §2.6
+2. `docs/06_SCREEN_CATALOG.md` §7.2 — `S-CHAR-BUILDER` bileşen hiyerarşisi
+3. `docs/05_FRONTEND_SPEC.md` §3 — character route'ları
+4. `docs/03_API_CONTRACTS.md` §7 — POST/PATCH alanları
+5. `docs/22-frontend-forms` (glob) — RHF multi-step, debounce pattern
+
+**Uygulama planı:**
+1. `charactersApi.ts` — `createCharacter`, `updateCharacter`, `getCharacter` (`docs/05` §4 pattern)
+2. `CharacterBuilderPage` — 6 tab: Race & Class, Ability Scores, Background, Equipment, Spells, Review (`docs/06` §7.2)
+3. **Faz 2 input stratejisi:** `RaceSelect`/`ClassSelect` → `<Input>` serbest metin (`race`, `className`); reference API **kullanma** (Faz 3)
+4. Ability scores tab — modifier derived display; Point Buy opsiyonel MVP basit (Manual number inputs yeterli)
+5. Auto-save: `useAutoSave` 500ms debounce PATCH; `AutoSaveIndicator` (`docs/06` §7.2)
+6. Yeni akış: Tab 1 name dolu → `POST /characters` → `navigate(/characters/:id/builder, { replace: true })`
+7. Portrait: **UI yok** — `portrait_url` null kalır (Faz 5 upload)
+8. Review tab: summary readonly — **campaign assign ve visibility yok** (§2.7)
+9. Vitest: modifier calculation; auto-save hook debounce mock
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Oluştur | `pages/characters/CharacterBuilderPage.tsx`, `features/characters/builder/**`, `store/api/charactersApi.ts`, `hooks/useAutoSave.ts`, `*.test.tsx` |
+| Güncelle | `apps/web/src/App.tsx` (routes) |
+| Dokunma | `S-CHAR-LIST/DETAIL` (§2.7), reference API (Faz 3), uploads (Faz 5) |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| POST minimal name | `docs/06` §7.2 auto-save | first save creates row |
+| PATCH partial JSONB | `docs/03` §7 | ability_scores, hp, skills |
+| Free text race/class | `docs/10` §2.6 | Input not Select — Faz 3 wire |
+| No portrait upload | `docs/10` §2.6 | PortraitUpload bileşeni yok |
+| Single form instance | `docs/06` §7.2 | RHF `FormProvider` tüm tablar |
+
+**Kalite kapıları:**
+- [ ] Vitest: modifier `Math.floor((score-10)/2)`
+- [ ] Vitest: create → PATCH called after debounce (msw)
+- [ ] `pnpm --filter web test -- --ci` yeşil
+- [ ] `pnpm --filter web build` yeşil
+- [ ] Manuel: new character → tab geçiş → refresh → data persists
+
+**Bu iterasyonda yok:**
+- `/reference/races` dropdown (Faz 3)
+- `/uploads/presign` portrait (Faz 5)
+- Campaign assignment UI, visibility toggle (§2.7)
+- `S-CHAR-DETAIL` sheet view (§2.7)
+
+**Risk / dikkat:**
+- 12+ dosya riski — tab bileşenlerini tek `features/characters/builder/tabs/` altında tut
+- JSONB form state boyutu — PATCH yalnızca değişen alanlar (RTK `updateCharacter` partial)
+- DM edit mode: route `/characters/:id/builder` — backend `canUpdate` (owner veya DM) (`docs/06` §7.2 auth)
+
+**Stop:**
+- [ ] `pnpm --filter web test -- --ci`
+- [ ] Manuel builder smoke (create + auto-save)
+- [ ] `pnpm lint && pnpm typecheck && pnpm test`
+- [ ] PR/onay → İterasyon 7
+
+---
+
+### İterasyon 7 — Character list/detail/edit + campaign atama (2.7)
+
+**Hedef:** `S-CHAR-LIST`, `S-CHAR-DETAIL`, campaign assign/unassign ve visibility UI çalışır; public karakter misafir erişimi doğru.
+
+**Teslim çıktısı:**
+- `apps/web/src/pages/characters/CharacterListPage.tsx`, `CharacterDetailPage.tsx`
+- `features/characters/CampaignAssignment.tsx`, `VisibilityToggle.tsx`
+- `charactersApi.ts` genişletme — `assignCampaign`, `setVisibility`, `deleteCharacter`
+- Route: `/my-characters`, `/characters/:id`; `/characters/:id/edit` → builder redirect
+
+**Önkoşullar:**
+- [ ] İterasyon 6 Stop — builder create/edit çalışır
+- [ ] En az bir campaign + member test verisi (manuel veya seed)
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §2.7
+2. `docs/06_SCREEN_CATALOG.md` §7.1, §7.3, §7.4 — list, detail, edit redirect
+3. `docs/03_API_CONTRACTS.md` §7 — campaign + visibility PATCH
+4. `docs/05_FRONTEND_SPEC.md` §3 — mixed layout public character
+5. `docs/07_SECURITY_IMPLEMENTATION.md` §5 — PUBLIC vs PRIVATE UI
+
+**Uygulama planı:**
+1. `S-CHAR-LIST` — `/my-characters`; kart grid; delete confirm; link builder/detail (`docs/06` §7.1)
+2. `S-CHAR-DETAIL` — sheet readonly görünüm; PUBLIC → Public Layout / misafir OK (`docs/06` §7.3)
+3. `CampaignAssignment` — campaign select (user member campaigns); `PATCH …/campaign`; unassign (`docs/03` §7)
+4. `VisibilityToggle` — owner only; PUBLIC/PRIVATE (`docs/03` §7)
+5. Edit route redirect: `/characters/:id/edit` → `/characters/:id/builder` (`docs/06` §7.4)
+6. Campaign detail'de atanmış karakter linkleri (§2.5 detay sayfasına ekleme bu iterasyonda tamamlanır)
+7. Vitest: visibility toggle owner-only; public detail without auth (msw)
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Oluştur | `CharacterListPage.tsx`, `CharacterDetailPage.tsx`, `features/characters/CampaignAssignment.tsx`, `VisibilityToggle.tsx`, `*.test.tsx` |
+| Güncelle | `charactersApi.ts`, `App.tsx`, `pages/campaigns/CampaignDetailPage.tsx` (character links) |
+| Dokunma | WebSocket live fields (Faz 4), reference picker (Faz 3) |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| `S-CHAR-LIST` route | `docs/06` §7.1 | `/my-characters` |
+| PUBLIC detail guest | `docs/06` §7.3 | no ProtectedRoute when PUBLIC |
+| Assign 409 UI | `docs/03` §7 | toast "Already assigned to a campaign" |
+| Edit redirect | `docs/06` §7.4 | `<Navigate to={builder} replace />` |
+| Delete owner/DM | `docs/03` §7 DELETE | confirm modal |
+
+**Kalite kapıları:**
+- [ ] Vitest: VisibilityToggle hidden for non-owner
+- [ ] Vitest: PUBLIC character page renders without auth token
+- [ ] `pnpm --filter web test -- --ci` yeşil
+- [ ] Manuel: assign → görünür campaign detail'de → unassign
+
+**Bu iterasyonda yok:**
+- Live HP/conditions edit (Faz 4 DM Screen)
+- Portrait upload
+- Full-text search beyond API `search` param
+
+**Risk / dikkat:**
+- PUBLIC karakter PII — yalnızca `ownerUsername` göster (`docs/07` §13)
+- Campaign select yalnızca üye olunan campaign'ler — API 403 handling
+
+**Stop:**
+- [ ] `pnpm --filter web test -- --ci`
+- [ ] Manuel uçtan uca: builder → assign → campaign detail → public toggle
+- [ ] `pnpm lint && pnpm typecheck && pnpm test && pnpm --filter web build`
+- [ ] PR/onay → İterasyon 8
+
+---
+
+### İterasyon 8 — Stabilizasyon (2.8)
+
+**Hedef:** Faz 2 yetki test matrisi gap'leri kapatılır; CI yeşil; Faz 2 Done Definition checklist PR'da doğrulanır.
+
+**Teslim çıktısı:**
+- Eksik integration deny senaryoları (`campaigns`, `characters`, `dm-notes` controller specs)
+- Policy coverage %100 doğrulama
+- (Gerekirse) FE test gap — guard/conditional render
+- PR açıklamasında Faz 2 çıktı kriterleri checklist
+
+**Önkoşullar:**
+- [ ] İterasyon 7 Stop — ana akışlar manuel smoke OK
+- [ ] Tüm önceki Faz 2 PR'ları merge edilmiş
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §2.8 + Faz 2 Çıktı Kriteri
+2. `docs/08_TESTING_STRATEGY.md` §4–5 — AUTH-007 matris, deny kombinasyonları
+3. `docs/07_SECURITY_IMPLEMENTATION.md` §5 — Campaign + Character kuralları
+4. `docs/03_API_CONTRACTS.md` §5–7, §10 — error code eksikleri
+5. `docs/10_IMPLEMENTATION_ROADMAP.md` Bölüm 9 — insan gate
+
+**Uygulama planı:**
+1. Matris audit: owner/member/outsider/ADMIN/deactivated/unverified her yazma endpoint (`@43-add-authorization-policy` Step 4 matris)
+2. Eksik integration test ekle — özellikle character PUBLIC guest, campaign leave side effect, dm-notes reorder edge
+3. `jest.config.ts` — `policies/` %100, `auth/` ≥%95 hâlâ yeşil
+4. CI kırmızı varsa `@46-fix-failing-test`
+5. `docker compose down -v && up -d && migrate deploy && seed` — Faz 2 tabloları (`docs/09` §2)
+6. PR checklist: Faz 2 Çıktı Kriteri maddeleri
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Güncelle | `*.controller.spec.ts`, `*.policy.spec.ts`, `jest.config.ts`, (gerekirse) `*.test.tsx` |
+| Dokunma | Yeni feature, schema migration, yeni endpoint |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| Testsiz yetki merge yok | `docs/08` §1, `[TEST-002]` | her deny senaryosu |
+| policies %100 | `docs/08` §9, `04-quality-gates` | jest threshold |
+| Deactivated user deny | `docs/07` §14, `[AP-002]` | login + read filter |
+| Faz insan gate | `docs/10` Bölüm 9 | PR'da checklist |
+
+**Kalite kapıları:**
+- [ ] `pnpm --filter api test -- --ci --coverage` — policies %100
+- [ ] `pnpm --filter web test -- --ci` yeşil
+- [ ] Full gate: `pnpm lint && pnpm typecheck && pnpm test && build`
+- [ ] Faz 2 Çıktı Kriteri — tüm maddeler işaretli veya bilinen gap dokümante
+
+**Bu iterasyonda yok:**
+- Yeni özellik, Faz 3+ kapsam
+- DM Screen, WebSocket, admin panel
+
+**Risk / dikkat:**
+- Scope creep reddet — yalnızca test/stabilizasyon
+- Flaky integration — truncate `afterEach` (`docs/08` §4)
+
+**Stop:**
+- [ ] `docker compose down -v && docker compose up -d && pnpm --filter api prisma migrate deploy && pnpm --filter api prisma db seed`
+- [ ] `pnpm lint && pnpm typecheck && pnpm test && pnpm --filter web build && pnpm --filter api build`
+- [ ] Faz 2 Done Definition checklist PR'da
+- [ ] **İnsan faz onayı bekle** — Faz 3 planlaması onay sonrası
+
+---
+
+## Required Context
+
+- `docs/10_IMPLEMENTATION_ROADMAP.md` Bölüm 4 + §2.1–§2.8 + Bölüm 8 (Faz 2 Oturumları)
+- `docs/mimari-kararlar.md` — `[AUTH-007]`, `[CODE-004]` agent yasakları
+- İterasyon başına: yalnızca o iterasyonun **Docs okuma sırası** (yukarıda)
+- How-to: `@40-add-new-endpoint`, `@41-add-new-screen`, `@42-add-prisma-migration`, `@43-add-authorization-policy`, `@46-fix-failing-test`, `@48-git-phase-branch`
+
+## Done Definition
+
+- [ ] DM campaign CRUD + invite + member remove (`docs/10` Faz 2 çıktı)
+- [ ] Oyuncu invite ile katılır; duplicate join 409
+- [ ] DM notes CRUD + reorder (REST)
+- [ ] Character builder uçtan uca; auto-save çalışır
+- [ ] Campaign assign/unassign + visibility PUBLIC/PRIVATE
+- [ ] DM campaign'e atanmış karakteri düzenleyebilir
+- [ ] Yetki matrisi integration testlerle kapsanmış — testsiz merge yok
+- [ ] `common/policies/` coverage %100; CI yeşil
+- [ ] UI metinleri İngilizce; a11y temel kontroller
+- [ ] İnsan faz gate onayı (`docs/10` Bölüm 9)
+
+## Explicit Don'ts
+
+- WebSocket, `PATCH /characters/:id/live`, DM Screen UI (Faz 4)
+- Reference API dropdown, 5e seed verisi (Faz 3)
+- Portrait upload / presigned URL (Faz 5)
+- Homebrew, collection, admin panel, profil sayfası
+- Guard'sız yazma endpoint'i; raw SQL; access token localStorage
+- `main`'e push; production deploy; faz geçişi onaysız
+- API body / ekran tablosunu bu `.mdc`'ye kopyalama
+
+---
+
+Phase done → `docs/10_IMPLEMENTATION_ROADMAP.md` Faz 2 insan gate; opsiyonel `@phase-controller` gap audit.

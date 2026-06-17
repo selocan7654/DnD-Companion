@@ -1,0 +1,227 @@
+---
+description: Step-by-step procedure to record architectural decisions in docs/mimari-kararlar.md. Use when pinning stack, adding framework, resolving open decisions, or superseding existing [KATEGORI-NNN] karar IDs.
+---
+
+# Write Architectural Decision — Procedure
+
+**Single source of truth:** `docs/mimari-kararlar.md` — there is **no** `docs/adr/` folder in this project. Rules and code reference karar IDs like `[TS-012]`, `[AUTH-004]`; they do not duplicate full decision text.
+
+## Step 0: When an ADR Is Required
+
+Record a decision **before** implementation when:
+
+| Trigger | Example |
+| --- | --- |
+| New framework or major library | Redis client swap, ORM change |
+| Stack pin change | React state library, test runner |
+| Unresolved Bölüm 18 open item | `[INF-OPEN-1]` deployment platform |
+| Cross-cutting security/auth change | Token storage model change |
+| Pattern not covered by existing karar | New real-time transport |
+
+**Not required:** routine CRUD, bug fixes, following existing pinned stack (`00-project-identity.mdc`).
+
+Load: `docs/mimari-kararlar.md` (full index + Bölüm 18), related `docs/0x` spec.
+
+## Step 1: Check Existing Kararlar
+
+Search `docs/mimari-kararlar.md` for related IDs:
+
+```bash
+rg "AUTH-|TS-|INF-|CODE-" docs/mimari-kararlar.md
+```
+
+| Outcome | Action |
+| --- | --- |
+| Karar exists and fits | Reference ID in PR; **no new entry** |
+| Karar exists but wrong | Supersede with new ID + note old ID deprecated |
+| Open item matches | Close `[KATEGORI-OPEN-N]` in Bölüm 18 |
+| No coverage | Add new karar (Step 2) |
+
+## Step 2: Choose Karar ID Format
+
+Format: `[KATEGORI-SIRA]` or `[KATEGORI-OPEN-N]` for open items.
+
+| Prefix | Domain |
+| --- | --- |
+| `P-` | Project scope, MVP |
+| `TS-` | Tech stack |
+| `INF-` | Infrastructure |
+| `AUTH-` / `SEC-` | Security, authorization |
+| `CODE-` | Coding conventions |
+| `R-` | Roles |
+| `AP-` | Admin panel |
+
+Next sequence: scan section for highest number, increment.
+
+Open decisions → Bölüm 18 with priority: 🔴 high, 🟠 medium, 🟢 low.
+
+## Step 3: Write Karar Entry
+
+Add under the **correct section** (1–17), not a separate file:
+
+```markdown
+**Karar [TS-0XX]:** <Short title> — <Chosen option>. <1–3 sentence rationale>.
+Gerekçe: <why this over alternatives>. İlgili: `docs/04_BACKEND_SPEC.md` Bölüm X.
+```
+
+Required elements:
+
+```
+[ ] Karar ID unique
+[ ] Decision stated imperatively (what we do)
+[ ] Rationale (why — scale, security, MVP scope)
+[ ] Rejected alternatives mentioned briefly if non-obvious
+[ ] Links to affected docs sections
+[ ] MVP in/out explicit if scope decision
+```
+
+Example style (from existing doc):
+
+> **Karar [AUTH-002]:** Yetki çözümleme stratejisi — **Runtime, cache'siz**. ...
+
+## Step 4: Update Bölüm 18 (Open Decisions)
+
+If closing an open item:
+
+1. Remove row from Bölüm 18 table/list.
+2. Add resolved karar in proper section.
+3. Note in version footer (bottom of doc): date + ID closed.
+
+If **cannot** decide (deployment platform unset):
+
+- Do **not** implement dependent code.
+- Leave `[INF-OPEN-N]` open.
+- Code: `// TODO: [INF-OPEN-1] — mimari karar gerekiyor`
+
+Agent must not assume open decisions ([CODE-004]).
+
+## Step 5: Propagate to Spec Docs
+
+Update affected specs in **same PR** as karar:
+
+| Karar type | Update |
+| --- | --- |
+| API contract | `docs/03_API_CONTRACTS.md` |
+| DB | `docs/02_DATABASE_SCHEMA.md` |
+| Backend module | `docs/04_BACKEND_SPEC.md` |
+| Frontend | `docs/05_FRONTEND_SPEC.md` |
+| Security | `docs/07_SECURITY_IMPLEMENTATION.md` |
+| Roadmap impact | `docs/10_IMPLEMENTATION_ROADMAP.md` |
+
+`.mdc` rules get **ID reference only** — not full karar text. Update `00-project-identity.mdc` only if stack pin table changes (rare; human review).
+
+## Step 6: Do NOT Create docs/adr/
+
+This project consolidates decisions in `mimari-kararlar.md` per project convention. No MADR files under `docs/adr/`.
+
+## Step 7: PR and Commit
+
+```
+docs(mimari): add [TS-0XX] decision for <topic>
+```
+
+PR sections:
+
+```markdown
+## Karar
+[TS-0XX]: <title>
+
+## Etkilenen spec
+- docs/04 Bölüm X
+- docs/03 Bölüm Y
+
+## Implementation follow-up
+- [ ] Feature PR after merge
+```
+
+Decisions merge **before** or **with** implementation PR — never silent divergence.
+
+## Step 8: Reference in Code and Rules
+
+In code comments (sparingly):
+
+```typescript
+// Campaign list filtered by membership — [AUTH-004]
+```
+
+In PR description: `Implements [TS-0XX]`.
+
+## Anti-patterns
+
+- ❌ Creating `docs/adr/0001-*.md` parallel track
+- ❌ Implementing before karar for stack/open items
+- ❌ Copying entire Bölüm 14 stack table into `.mdc`
+- ❌ Karar without rationale
+- ❌ Leaving Bölüm 18 open item while coding dependent feature
+- ❌ Superseding karar without documenting old ID deprecated
+
+## Section Map (mimari-kararlar.md)
+
+| Bölüm | Topics |
+| --- | --- |
+| 1 | Proje kimliği, MVP |
+| 2 | Ölçek |
+| 3–4 | Auth, yetkilendirme |
+| 5 | Roller |
+| 10 | Güvenlik |
+| 14 | Tech stack pin |
+| 15 | Altyapı |
+| 17 | Kod kuralları [CODE-004] |
+| 18 | Açık kararlar |
+
+Place new karar in the section that owns the concern — not a catch-all appendix.
+
+## Superseding a Karar
+
+When reversing a decision:
+
+```markdown
+**Karar [TS-0XX]:** … (supersedes [TS-00Y], deprecated 2026-06-17)
+```
+
+Keep old ID in doc with strikethrough note — do not delete history without human approval. Update `00-project-identity.mdc` stack table only when pin changes.
+
+## Relationship to phase-creator
+
+Phase rules reference karar IDs; phase-creator does not duplicate karar text. New faz scope requiring new stack → ADR **before** phase `.mdc` approval.
+
+## Examples Requiring Karar
+
+| Request | Why |
+| --- | --- |
+| Switch Zustand for Redux | Stack pin change [TS-*] |
+| Add GraphQL alongside REST | API strategy |
+| Store access token in cookie | Security [SEC-*] |
+| Add MongoDB for logs | Infrastructure |
+
+## Examples NOT Requiring Karar
+
+| Request | Why |
+| --- | --- |
+| Add campaign PATCH field | Spec in docs/03 |
+| Extract CampaignPolicy | Pattern already [AUTH-003] |
+| Fix 404 test | Bug fix |
+
+## Troubleshooting
+
+| Mistake | Fix |
+| --- | --- |
+| Implemented before karar | Revert or pause; write karar; re-implement |
+| Duplicate ID | Search doc; use next free sequence |
+| Karar in PR only | Must land in mimari-kararlar.md same merge |
+
+## Checklist
+
+```
+[ ] Searched existing kararlar — no duplicate
+[ ] ID format [KATEGORI-NNN] correct
+[ ] Entry in correct section of mimari-kararlar.md
+[ ] Bölüm 18 updated if resolving open item
+[ ] Related docs/0x sections updated
+[ ] No docs/adr/ file created
+[ ] Implementation blocked until merged (if open decision was blocker)
+```
+
+---
+
+Detay: `docs/mimari-kararlar.md` (Bölüm 1–18, "Nasıl Kullanılır?"); `docs/10_IMPLEMENTATION_ROADMAP.md` Bölüm 1; `docs/00_PROJECT_OVERVIEW.md`

@@ -1,0 +1,279 @@
+---
+description: UI bileşenleri — shadcn/ui, features vs components, DM Screen layout, shared patterns. components/ ve features/ düzenlemelerinde.
+globs:
+  - "apps/web/src/components/**"
+  - "apps/web/src/features/**"
+---
+
+# DnD Companion — Frontend Components
+
+İki katman: **`components/`** (domain-agnostik, yeniden kullanılabilir) ve **`features/`** (domain UI + küçük logic). Sayfa orchestration → `pages/` (`21-frontend-routes.mdc`).
+
+Form alanları → `22-frontend-forms.mdc`; a11y → `25-frontend-a11y.mdc`.
+
+## Klasör Sınırları
+
+| Konum | İçerik | Örnek |
+| --- | --- | --- |
+| `components/ui/` | shadcn/ui primitives | `Button`, `Dialog`, `Tabs` |
+| `components/` | App-wide composite | `Pagination`, `EmptyState`, `ImageUpload` |
+| `features/<domain>/` | Domain bileşen | `CampaignCard`, `LiveFieldCard` |
+| `features/<domain>/builder/` | Character builder tab'ları | `RaceClassTab` |
+| `pages/` | Route container | `CampaignListPage` |
+
+```typescript
+// ✓ Doğru — feature domain logic
+// features/campaigns/InviteLinkManager.tsx
+export function InviteLinkManager({ campaignId, isOwner }: Props) {
+  const [regenerate] = useRegenerateInviteMutation();
+  if (!isOwner) return null;
+  // ...
+}
+
+// ✗ Yanlış — domain logic generic components'ta
+// components/ui/button.tsx içinde campaign invite
+```
+
+## shadcn/ui Kullanımı
+
+Bileşenler copy-paste `components/ui/` — npm `@shadcn/*` monolith paketi yok. Tailwind + `cn()` utility.
+
+Temel set: `Button`, `Input`, `Textarea`, `Select`, `Checkbox`, `Switch`, `Card`, `Dialog`, `Sheet`, `Tabs`, `Table`, `Badge`, `DropdownMenu`, `Command`, `Toast`, `Skeleton`, `Accordion`, `Tooltip`, `Form`.
+
+```typescript
+// ✓ Doğru — variant via cn + cva
+<Button variant="destructive" size="sm" aria-label="Delete campaign">
+  Delete
+</Button>
+
+// ✗ Yanlış — inline style veya custom CSS module her yerde
+<button style={{ color: 'red' }}>Sil</button>
+```
+
+Kullanılmayan shadcn bileşeni import etme — bundle şişmesin.
+
+## Paylaşılan Composite Bileşenler
+
+| Bileşen | Rol |
+| --- | --- |
+| `Pagination` | Cursor tabanlı liste footer |
+| `SearchInput` | Debounced 300ms arama |
+| `FilterBar` | Homebrew/reference filtre chip'leri |
+| `DataTable` | Admin listeleri (sıralama `aria-sort`) |
+| `EmptyState` | Liste boş + CTA |
+| `LoadingSpinner` | `role="status"`, `aria-label="Loading"` |
+| `ConfirmDialog` | Destructive action onay |
+| `ImageUpload` | Resize + presign akışı |
+| `EmailVerificationBanner` | Layout üstü sarı banner |
+
+Props interface export et; `any` prop yasak.
+
+## Feature: Campaign
+
+- `CampaignCard` — liste kartı, hover prefetch opsiyonel.
+- `MemberList` — üye avatar + username (email **gösterme** — PII).
+- `InviteLinkManager` — DM-only; copy + regenerate.
+
+## Feature: Character
+
+- `CharacterSheet` — responsive grid/accordion.
+- `CharacterCard` — liste özet.
+- `LiveFieldsBadge` — WS bağlı göstergesi.
+- `builder/*Tab` — builder tab içerikleri (`22-frontend-forms.mdc`).
+
+### Character Sheet Responsive
+
+```tsx
+// ✓ Doğru — lg grid, mobil accordion
+<div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+  <section className="lg:col-span-1">{/* abilities, HP, AC */}</section>
+  <section className="lg:col-span-1">{/* skills, features */}</section>
+  <section className="lg:col-span-1">{/* equipment, spells */}</section>
+</div>
+{/* mobil: Accordion ile aynı bölümler */}
+
+// ✗ Yanlış — sabit 3 kolon tüm breakpoint'lerde
+<div className="grid grid-cols-3">
+```
+
+## Feature: DM Screen (S-DM-SCREEN)
+
+Masaüstü 2 kolon; mobil tab — **kritik layout**:
+
+```tsx
+// ✓ Doğru — lg split, mobil Tabs
+function DmScreenPage() {
+  useWebSocket(campaignId);
+  return (
+    <>
+      <div className="hidden lg:grid lg:grid-cols-2 lg:gap-6">
+        <PlayerCharacterPanel campaignId={campaignId} />
+        <DmNotesPanel campaignId={campaignId} />
+      </div>
+      <div className="lg:hidden">
+        <Tabs defaultValue="players">
+          <TabsList aria-label="DM Screen sections">
+            <TabsTrigger value="players">Players</TabsTrigger>
+            <TabsTrigger value="notes">Notes</TabsTrigger>
+          </TabsList>
+          <TabsContent value="players">
+            <PlayerCharacterPanel campaignId={campaignId} />
+          </TabsContent>
+          <TabsContent value="notes">
+            <DmNotesPanel campaignId={campaignId} />
+          </TabsContent>
+        </Tabs>
+      </div>
+    </>
+  );
+}
+
+// ✗ Yanlış — mobilde 2 kolon squeeze
+<div className="grid grid-cols-2">
+```
+
+`PlayerCharacterPanel`: live field kartları (`LiveFieldCard` — HP, conditions, death saves). `DmNotesPanel`: not listesi + inline edit.
+
+Full-width layout — App sidebar gizli (`21-frontend-routes.mdc`).
+
+## Feature: Homebrew
+
+- `HomebrewCard` — galeri kartı, `aspect-ratio` CLS önleme.
+- `HomebrewForm` — type conditional (`22-frontend-forms.mdc`).
+- `StatusBadge` — DRAFT/PUBLISHED renk + metin (renk tek başına anlam taşımaz).
+
+Galeri: `lg` 3–4 kolon grid + sidebar filtre; mobil `Sheet` drawer filtre.
+
+### Homebrew Detail Mixed Auth
+
+Published homebrew misafire açık — `useGetHomebrewQuery` public. DRAFT yalnızca sahip API'den görür; FE owner badge + edit link koşullu.
+
+## Feature: Collections
+
+`CollectionToggle` — heart/bookmark; optimistic toggle + rollback on error.
+
+## Feature: Reference
+
+Salt okunur — form yok. `ReferenceListPage` / `ReferenceDetailPage` public RTK query. Tip filtre `:type` path param enum shared'dan.
+
+## Feature: Admin
+
+`DataTable` + server-side cursor pagination. Row actions: deactivate, delete content — `ConfirmDialog` zorunlu. Admin API `adminApi` slice — tag `AdminUsers`, `AdminContent`.
+
+Bulk işlem MVP dışı — tekil satır action.
+
+## Campaign Detail Responsive
+
+```tsx
+// ✓ Doğru — lg yan yana, mobil stack
+<div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+  <MemberList campaignId={id} />
+  <CharacterList campaignId={id} />
+</div>
+```
+
+Banner `fetchpriority="high"` — LCP adayı.
+
+## ConfirmDialog Pattern
+
+Destructive mutation öncesi:
+
+```tsx
+<ConfirmDialog
+  title="Delete campaign?"
+  description="This action cannot be undone."
+  confirmLabel="Delete"
+  variant="destructive"
+  onConfirm={() => deleteCampaign(id)}
+/>
+```
+
+Focus trap ve `aria` → `25-frontend-a11y.mdc`.
+
+## Koşullu Render (UX Yetki)
+
+Buton gizleme policy mirror — **güvenlik değil**:
+
+```typescript
+// ✓ Doğru
+{isOwner && <Button onClick={onDelete}>Delete</Button>}
+
+// ✗ Yanlış — email başka kullanıcıda
+<span>{member.email}</span>
+```
+
+Deaktive kullanıcı içeriği API dönmez — UI fallback gerekmez.
+
+## Loading ve Empty States
+
+Her liste/feature üç state:
+
+1. **Loading** — `Skeleton` (`aria-hidden="true"`) veya spinner.
+2. **Empty** — `EmptyState` + CTA ("Create your first campaign").
+3. **Error** — retry button + toast.
+
+```tsx
+// ✓ Doğru
+if (isLoading) return <CampaignListSkeleton />;
+if (isError) return <ErrorState onRetry={refetch} />;
+if (!data?.length) return <EmptyState title="No campaigns yet" action={...} />;
+```
+
+## ImageUpload Bileşeni
+
+Purpose-driven max dimension; client MIME gate; SVG reject:
+
+```typescript
+const ALLOWED = ['image/png', 'image/jpeg', 'image/webp'];
+if (!ALLOWED.includes(file.type)) {
+  toast.error('Only PNG, JPEG, and WebP images are allowed');
+  return;
+}
+```
+
+Upload sonrası `onUploadComplete(publicUrl)` callback — parent PATCH mutation.
+
+## Toast Bildirimleri
+
+shadcn `Toast` / sonner — `role="status"`, `aria-live="polite"`. Error: `toast.error(message)` İngilizce API `message`.
+
+## İkonlar
+
+Lucide-react tree-shake import: `import { Trash2 } from 'lucide-react'`. İkon-only buton → `aria-label` zorunlu.
+
+## Styling Kuralları
+
+- Tailwind utility-first; custom CSS yalnızca `globals.css` theme token.
+- `focus-visible:ring-2` — `outline-none` tek başına yasak.
+- Mobil-first: default mobil, `lg:` masaüstü.
+- Özel breakpoint ekleme yasak.
+
+## Component Checklist
+
+```
+[ ] Doğru klasör (ui vs features vs components)
+[ ] UI metinleri İngilizce
+[ ] DM Screen: lg 2-col / mobil Tabs
+[ ] Character sheet responsive grid/accordion
+[ ] İkon buton aria-label
+[ ] Empty/loading/error üçlüsü
+[ ] PII: email gösterme (username + avatar)
+[ ] ImageUpload MIME + resize
+[ ] Koşullu render UX only
+```
+
+## Anti-pattern'ler
+
+- ❌ Domain bileşeni `components/ui/` altında
+- ❌ `pages/` içinde 200+ satır presentational JSX (extract to features)
+- ❌ DM Screen mobilde 2 kolon
+- ❌ Skeleton'da aria-live (aria-hidden kullan)
+- ❌ Durum sadece renk (badge metinsiz)
+- ❌ SVG upload UI'da izin verme
+- ❌ Türkçe label/button
+- ❌ `member.email` render (PII)
+- ❌ Her kartta inline `useGetCampaignQuery` (prop drill veya parent fetch)
+
+---
+
+Detay: `docs/05_FRONTEND_SPEC.md` Bölüm 1, 7–9, 11–12; `docs/06_SCREEN_CATALOG.md` S-DM-SCREEN, S-CHAR-DETAIL, Grup 2–5; `docs/05_FRONTEND_SPEC.md` Bölüm 13 (a11y özet → 25)

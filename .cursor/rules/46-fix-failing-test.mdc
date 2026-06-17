@@ -1,0 +1,255 @@
+---
+description: Step-by-step procedure to diagnose and fix failing unit or integration tests (Jest, Vitest, auth matrix). Use when CI test job fails, coverage gate breaks, or fixing flaky supertest/Vitest specs.
+---
+
+# Fix Failing Test — Procedure
+
+Tests are merge gates (`04-quality-gates.mdc`). Fix the **root cause** — do not weaken assertions to green CI unless spec intentionally changed (then update docs too).
+
+## Step 0: Identify Failure Layer
+
+```bash
+# Full suite
+pnpm test
+
+# Backend only
+pnpm --filter api test -- --ci
+
+# Single file
+pnpm --filter api test -- campaigns.controller.spec.ts
+
+# Frontend only
+pnpm --filter web test -- --ci
+
+# Watch mode (local debug)
+pnpm --filter api test -- --watch campaigns.controller.spec.ts
+```
+
+| Symptom | Likely layer | Doc |
+| --- | --- | --- |
+| 401/403/404 mismatch | Auth integration | `docs/08` Bölüm 5 |
+| Validation 400 | DTO/schema drift | `docs/03`, `docs/04` Bölüm 7 |
+| Prisma unique/FK error | Factory or truncate order | `docs/08` Bölüm 4.2, 7 |
+| Timeout | DB not running, missing await | `docs/09` Bölüm 2 |
+| Coverage threshold | Missing policy/guard test | `docs/08` Bölüm 9 |
+| Component not found | FE import/path | `docs/05` Bölüm 1 |
+| MSW unhandled request | RTK Query mock gap | `docs/08` Bölüm 6 |
+
+## Step 1: Reproduce Locally
+
+```
+[ ] docker compose up -d (Postgres + Redis)
+[ ] TEST_DATABASE_URL set for API integration tests
+[ ] pnpm --filter api prisma migrate deploy (test setup does this in beforeAll)
+[ ] Same Node/pnpm version as CI
+```
+
+Read full error output — first failing assertion, not last cascade.
+
+## Step 2: Classify Failure Type
+
+### A. Production bug (test is correct)
+
+Test exposes real defect → fix application code, keep test.
+
+### B. Spec drift (implementation intentionally changed)
+
+1. Confirm change matches `docs/03` or `docs/01`.
+2. Update test expectations.
+3. Update docs if contract changed.
+
+### C. Test bug (flaky or wrong setup)
+
+Fix factory, mock, or assertion — do not change production code.
+
+### D. Environment issue
+
+DB port conflict (`5433` test), Redis down, env var missing → fix setup, not business logic.
+
+## Step 3: Backend Integration Failures
+
+### Auth token issues
+
+```typescript
+const { accessToken } = await loginAsUser(app, user.email, 'TestPassword1!');
+await request(app.getHttpServer())
+  .get('/api/v1/campaigns')
+  .set({ Authorization: `Bearer ${accessToken}` });
+```
+
+Check: `emailVerifiedAt` for verified-only endpoints, `isActive` for deactivated user tests.
+
+### 404 vs 403
+
+Per `docs/08` Bölüm 5 matrices — stranger reading private campaign expects **404**, not 403.
+
+### Database isolation
+
+`afterEach` truncate must respect FK order (`docs/08` Bölüm 4.2). New table? Add to truncate list.
+
+```typescript
+afterEach(async () => {
+  await prisma.$transaction([
+    prisma.dmNote.deleteMany(),
+    prisma.campaignMember.deleteMany(),
+    // ... children before parents
+    prisma.user.deleteMany(),
+  ]);
+});
+```
+
+### Factory data
+
+Use `test/factories/` — unique email per test run if needed:
+
+```typescript
+const owner = await createTestUser({
+  email: `owner-${Date.now()}@test.com`,
+  emailVerifiedAt: new Date(),
+});
+```
+
+## Step 4: Backend Unit Failures (Policy/Guard)
+
+Policy files require **100%** coverage (`docs/08` Bölüm 9).
+
+```typescript
+describe('CampaignPolicy.canRead', () => {
+  it('returns true for campaign member', () => {
+    expect(CampaignPolicy.canRead(memberUser, campaignWithMember)).toBe(true);
+  });
+});
+```
+
+Missing branch → add case, not `/* istanbul ignore */` unless truly unreachable.
+
+## Step 5: Frontend Test Failures
+
+### Validation messages
+
+Assert **English** strings matching Zod schema (`docs/02-language-naming.mdc`).
+
+### RTK Query + MSW
+
+Register handler for exact path and method:
+
+```typescript
+http.get('/api/v1/campaigns/:id', () => {
+  return HttpResponse.json({ data: mockCampaign });
+});
+```
+
+### Auth guard
+
+Mock Redux store with `user` / `isLoading` states.
+
+### CSS/asset imports
+
+Vitest `css: false`; mock static assets if needed.
+
+## Step 6: Coverage Gate Failures
+
+| Path | Threshold |
+| --- | --- |
+| `common/policies/` | 100% |
+| `common/guards/` | 100% |
+| `auth/` | ≥ 95% |
+
+Add meaningful tests for uncovered branches — not snapshot spam.
+
+## Step 7: Fix and Verify
+
+```bash
+pnpm lint && pnpm typecheck
+pnpm --filter api test -- --ci --coverage
+pnpm --filter web test -- --ci
+```
+
+Run failed file 3× locally to rule out flakiness.
+
+## Step 8: Commit Convention
+
+```
+test(campaigns): fix membership matrix expectation for GET :id
+
+test(auth): add missing canRead branch for deactivated owner
+```
+
+Separate `fix` vs `test` commits if production code also changed:
+
+```
+fix(campaigns): return 404 for non-member read
+test(campaigns): align matrix with 404 rule
+```
+
+## Step 9: When Failure Indicates Missing Test
+
+New endpoint without matrix → add tests per `@43-add-authorization-policy`, not delete failing placeholder.
+
+## Anti-patterns
+
+- ❌ `it.skip` / `xit` to merge without fix
+- ❌ Weakening `expect(res.status).toBe(403)` to `toBeGreaterThanOrEqual(400)`
+- ❌ Disabling truncate → shared DB pollution
+- ❌ Mocking Prisma in integration tests (use real DB)
+- ❌ Changing spec behavior without docs update
+- ❌ `any` cast to silence type errors in tests
+
+## CI-Specific Failures
+
+| CI job | Local command |
+| --- | --- |
+| lint | `pnpm lint` |
+| type-check | `pnpm typecheck` |
+| test-backend | `pnpm --filter api test -- --ci --coverage` |
+| test-frontend | `pnpm --filter web test -- --ci` |
+| security audit | `pnpm audit --audit-level=critical` |
+
+Re-run single CI job via `gh run view` / Actions log if local passes.
+
+## Debugging Integration App Bootstrap
+
+```typescript
+beforeAll(async () => {
+  const moduleRef = await Test.createTestingModule({
+    imports: [AppModule],
+  }).compile();
+  app = moduleRef.createNestApplication();
+  // apply same pipes/filters as main.ts
+  await app.init();
+});
+```
+
+Mismatch with production `ValidationPipe` config → tests pass locally with wrong setup.
+
+## Snapshot Tests
+
+Prefer explicit assertions over snapshots for API envelopes. Update snapshot only when UI copy intentionally changes (English).
+
+## Parallel Test Isolation
+
+Jest `maxWorkers` — if flaky under parallel, check unique constraints (email, username) in factories.
+
+## Escalation
+
+| Situation | Action |
+| --- | --- |
+| Matrix contradicts docs | Fix docs or code; docs win after human confirm |
+| Flaky WS test | `@47-websocket-live-fields`; check Redis adapter in test env |
+| Migration broke tests | `@42-add-prisma-migration` — update factories |
+
+## Checklist
+
+```
+[ ] Reproduced locally with same command as CI
+[ ] Root cause identified (app vs test vs env)
+[ ] Auth matrix expectations match docs/08 Bölüm 5
+[ ] Truncate order includes new tables
+[ ] Coverage gates satisfied for touched paths
+[ ] No skipped tests without linked issue
+[ ] lint + typecheck + test green
+```
+
+---
+
+Detay: `docs/08_TESTING_STRATEGY.md` Bölüm 1–7, 9; `docs/09_DEV_WORKFLOW.md` Bölüm 2, 7; `docs/03_API_CONTRACTS.md` Bölüm 2

@@ -1,0 +1,230 @@
+---
+description: Step-by-step procedure to add or change authorization policies (canRead/canUpdate, guards, 404/403, test matrix). Use when editing common/policies, permission rules, AUTH-007 matrix, or guard behavior.
+---
+
+# Add Authorization Policy — Procedure
+
+Authorization is **backend-only**. Policies live in `common/policies/`; guards in `common/guards/`. Matrix: `docs/07_SECURITY_IMPLEMENTATION.md` Bölüm 5.3; patterns → `12-backend-authorization.mdc`.
+
+## Step 0: Preconditions
+
+- [ ] Access rule defined in `docs/01_DOMAIN_MODEL.md` visibility section.
+- [ ] `docs/07_SECURITY_IMPLEMENTATION.md` matrix row exists or will be added.
+- [ ] Understand 404 vs 403 semantics ([AUTH-004]).
+
+Load: `docs/07_SECURITY_IMPLEMENTATION.md` Bölüm 5, `docs/04_BACKEND_SPEC.md` Bölüm 5, `docs/01_DOMAIN_MODEL.md` (visibility).
+
+## Step 1: Identify Resource and Actions
+
+| Resource | Policy file | Typical actions |
+| --- | --- | --- |
+| Campaign | `campaign.policy.ts` | read, update, delete, invite |
+| Character | `character.policy.ts` | read, write, live-update |
+| Homebrew | `homebrew.policy.ts` | read, update, publish |
+| Collection | `collection.policy.ts` | read, add, remove |
+| DM Note | `dm-note.policy.ts` | read, write (DM only) |
+
+Actions align with `packages/shared` `Action` / `Resource` enums when using central `can()` dispatcher.
+
+## Step 2: Implement Policy Function
+
+```typescript
+// apps/api/src/common/policies/campaign.policy.ts
+export class CampaignPolicy {
+  static canRead(user: AuthUser, campaign: CampaignWithMembers): boolean {
+    if (user?.role === Role.ADMIN) return true; // always first — [AUTH-008]
+    if (!user) return false;
+    if (campaign.ownerId === user.id) return true;
+    return campaign.members.some((m) => m.userId === user.id);
+  }
+
+  static canUpdate(user: AuthUser, campaign: Campaign): boolean {
+    if (user?.role === Role.ADMIN) return true;
+    if (!user) return false;
+    return campaign.ownerId === user.id;
+  }
+}
+```
+
+Rules:
+
+- **ADMIN bypass** first line in every check.
+- **No caching** — runtime DB lookup per request ([AUTH-002]).
+- DM/Player are **not** system roles — derive from `ownerId` / `campaign_members`.
+- Deactivated user content hidden from normal users; ADMIN sees ([AP-002]).
+
+## Step 3: Wire in Service (Not Controller)
+
+```typescript
+const campaign = await this.prisma.campaign.findUnique({
+  where: { id },
+  include: { members: true },
+});
+
+if (!campaign || !CampaignPolicy.canRead(user, campaign)) {
+  throw new NotFoundException();
+}
+
+if (!CampaignPolicy.canUpdate(user, campaign)) {
+  throw new ForbiddenException({
+    error: 'FORBIDDEN',
+    message: 'You do not have permission to update this campaign',
+  });
+}
+```
+
+| Situation | HTTP | Rationale |
+| --- | --- | --- |
+| No resource or no read access | **404** | Hide existence |
+| Resource visible, write denied | **403** | User knows resource exists |
+| Email not verified on write | **403** | `EMAIL_NOT_VERIFIED` |
+| No/invalid token | **401** | JwtAuthGuard |
+
+Campaign is **fully private** — non-members get 404 on detail, empty list on collection.
+
+## Step 4: Guards and Decorators
+
+Global guards (`APP_GUARD`):
+
+| Guard | Trigger |
+| --- | --- |
+| `JwtAuthGuard` | default; skip with `@Public()` |
+| `EmailVerifiedGuard` | `@RequireVerifiedEmail()` |
+| `RolesGuard` | `@Roles(Role.ADMIN)` |
+
+Do not duplicate `@UseGuards(JwtAuthGuard)` unless overriding global stack.
+
+WebSocket room join → membership check in gateway (`docs/07` Bölüm 6, `@47-websocket-live-fields`).
+
+## Step 5: Update Shared Constants (if new action)
+
+```typescript
+// packages/shared/src/permissions.ts
+export enum Action {
+  READ = 'READ',
+  UPDATE = 'UPDATE',
+  DELETE = 'DELETE',
+  // add only when spec requires
+}
+```
+
+Keep FE `Action`/`Resource` in sync for UI hints only — not security.
+
+## Step 6: Integration Test Matrix (Mandatory)
+
+**Testsiz yetki kuralı merge edilemez** ([TEST-002]).
+
+Actors (`docs/08` Bölüm 5.1): `ADMIN`, `owner`, `member`, `otherUser`, `unverified`, `deactivated`, `guest`.
+
+Add rows to `docs/08_TESTING_STRATEGY.md` Bölüm 5.2–5.4 if new endpoint pattern.
+
+```typescript
+describe('PATCH /campaigns/:id', () => {
+  it('403 — member cannot update campaign', async () => {
+    const res = await request(app.getHttpServer())
+      .patch(`/api/v1/campaigns/${campaign.id}`)
+      .set(authHeader(memberToken))
+      .send({ name: 'Hacked' });
+    expect(res.status).toBe(403);
+  });
+
+  it('404 — stranger cannot read campaign', async () => {
+    const res = await request(app.getHttpServer())
+      .get(`/api/v1/campaigns/${campaign.id}`)
+      .set(authHeader(strangerToken));
+    expect(res.status).toBe(404);
+  });
+});
+```
+
+Policy unit tests: `campaign.policy.spec.ts` — target **100%** branch coverage on `common/policies/` (`docs/08` Bölüm 9).
+
+## Step 7: Frontend (UX Only)
+
+- Hide/disable buttons when policy would deny — `docs/05` Bölüm 12.
+- Still handle `403`/`404` from API gracefully.
+- Never skip backend policy because UI hid the button.
+
+## Step 8: Document Matrix Update
+
+If rule is new or changed:
+
+- [ ] `docs/07_SECURITY_IMPLEMENTATION.md` Bölüm 5.3 table
+- [ ] `docs/08_TESTING_STRATEGY.md` Bölüm 5.x matrix
+- [ ] `docs/01_DOMAIN_MODEL.md` if visibility rule changed
+
+## Step 9: Pre-PR Verification
+
+```bash
+pnpm --filter api test -- --ci --coverage
+```
+
+Checklist (`03-security-baseline.mdc`):
+
+```
+[ ] Policy in service, not controller
+[ ] ADMIN bypass first
+[ ] 404 on unauthorized read (campaign/character private)
+[ ] Integration tests cover all actors for affected endpoints
+[ ] Policy unit tests for new branches
+[ ] No email/password in policy logs
+```
+
+## Anti-patterns
+
+- ❌ Inline `if (ownerId !== user.id)` in controller
+- ❌ 403 for stranger reading private campaign (leaks existence)
+- ❌ Cached membership for authorization
+- ❌ Frontend-only access control
+- ❌ Policy change without integration tests in same PR
+
+## Resource-Specific Notes
+
+### Campaign
+
+List endpoint returns only campaigns where user is DM or member. Stranger never sees other's campaign in list.
+
+### Character
+
+`PUBLIC` visibility → guest read OK. `PRIVATE` without campaign → owner + ADMIN only. Assigned to campaign → all campaign members read; write: owner or DM.
+
+### Homebrew
+
+`DRAFT` → owner (+ ADMIN). `PUBLISHED` → gallery public read. Publish transition may need `canPublish` check.
+
+### DM Notes
+
+DM only (`campaign.ownerId`). Players → 404 on all dm-notes routes.
+
+### Admin
+
+`@Roles(Role.ADMIN)` on controller; policy bypass still documented in service for clarity.
+
+## Email Visibility [SEC / PII]
+
+`email` in API response only when `requester.id === user.id` or ADMIN. Policy does not expose email in list endpoints for other users.
+
+## Deactivated Users [AP-002]
+
+Content from `is_active = false` users hidden from normal users in gallery/lists; ADMIN sees. Add test cases when touching homebrew/reference visibility.
+
+## WebSocket Authorization
+
+Room join uses same membership rule as campaign read — implement in gateway, not separate policy file unless shared helper extracted (`@47-websocket-live-fields`).
+
+## Open Decisions
+
+If rule unclear → stop; add `// TODO: [TOPIC] — mimari karar gerekiyor` and ask human. Do not guess on Bölüm 18 open items ([CODE-004]).
+
+## Troubleshooting
+
+| Symptom | Likely cause |
+| --- | --- |
+| Member gets 404 on campaign | `include: { members: true }` missing in service |
+| Public character 403 for guest | `visibility !== PUBLIC` in seed |
+| ADMIN fails | bypass not first line in policy |
+| Tests pass locally, fail CI | truncate order missing new FK table |
+
+---
+
+Detay: `docs/07_SECURITY_IMPLEMENTATION.md` Bölüm 5–6; `docs/04_BACKEND_SPEC.md` Bölüm 5; `docs/08_TESTING_STRATEGY.md` Bölüm 5; `docs/01_DOMAIN_MODEL.md`

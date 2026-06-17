@@ -1,0 +1,298 @@
+---
+description: Prisma schema, migration, seed, service DB erişimi — snake_case map, JSONB, transaction. prisma/ ve *.service.ts düzenlemelerinde.
+globs:
+  - "apps/api/prisma/**"
+  - "apps/api/src/**/*.service.ts"
+  - "apps/api/src/common/prisma/**"
+---
+
+# DnD Companion — Backend Database & Prisma
+
+Tüm DB erişimi **Prisma Client** üzerinden. Raw SQL ve string concatenation yasak [CODE-004], [SEC-010]. Şema tek kaynak: `apps/api/prisma/schema.prisma` + `docs/02_DATABASE_SCHEMA.md`.
+
+## PrismaService
+
+```typescript
+// ✓ Doğru — common/prisma/prisma.service.ts
+@Injectable()
+export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
+  async onModuleInit() {
+    await this.$connect();
+  }
+  async onModuleDestroy() {
+    await this.$disconnect();
+  }
+}
+
+// PrismaModule @Global() — service'lere inject
+constructor(private readonly prisma: PrismaService) {}
+```
+
+Test ortamında ayrı `DATABASE_URL` veya test container; `afterEach` truncate (`docs/08`).
+
+## Naming Convention
+
+| Katman | Kural | Örnek |
+| --- | --- | --- |
+| PostgreSQL tablo/kolon | `snake_case` | `campaign_members`, `owner_id` |
+| Prisma model | `PascalCase` | `CampaignMember` |
+| Prisma field (TS) | `camelCase` | `ownerId` |
+| Mapping | `@@map`, `@map` | `@@map("campaign_members")` |
+
+```prisma
+// ✓ Doğru
+model Campaign {
+  id        String   @id @default(uuid())
+  ownerId   String   @map("owner_id")
+  owner     User     @relation(fields: [ownerId], references: [id])
+  createdAt DateTime @default(now()) @map("created_at")
+  @@map("campaigns")
+}
+
+// ✗ Yanlış — DB'de camelCase kolon
+ownerId String @map("ownerId")
+```
+
+## PK ve Timestamp
+
+- UUID `@default(uuid())` — composite PK istisna: `campaign_members`, `collection_items`.
+- `created_at` her tabloda; mutable tablolarda `updated_at` `@updatedAt`.
+- UTC storage; uygulama UTC gönderir.
+
+## Enum'lar
+
+Prisma `enum` → PostgreSQL native enum. Shared ile uyum: `Role`, `HomebrewStatus`, `CharacterVisibility` `packages/shared` ve schema'da aynı değerler.
+
+Migration'da enum değeri ekleme dikkatli — PostgreSQL `ALTER TYPE`.
+
+## İlişkiler ve Cascade
+
+FK kuralları `docs/02_DATABASE_SCHEMA.md` Bölüm 4:
+
+- User silme → cascade politikası spec'e uy (MVP hard delete sınırlı; admin delete explicit).
+- `campaign_id` on Character: `SetNull` veya restrict — spec'teki cascade tablosu.
+
+```typescript
+// ✓ Doğru — ilişkili delete önce policy sonra prisma
+await this.prisma.$transaction([
+  this.prisma.dmNote.deleteMany({ where: { campaignId: id } }),
+  this.prisma.campaign.delete({ where: { id } }),
+]);
+
+// ✗ Yanlış — orphan kayıt veya raw delete
+await prisma.$executeRaw`DELETE FROM campaigns WHERE id = ${id}`;
+```
+
+## JSONB Alanlar
+
+Character `ability_scores`, homebrew `data`, audit `metadata` — PostgreSQL JSONB; **DB-level schema validation yok**.
+
+Uygulama katmanı:
+- Write öncesi Zod/class-validator
+- Read sonrası güven — typed cast yalnızca validate edilmiş veri için
+
+```typescript
+// ✓ Doğru
+const parsed = spellDataSchema.safeParse(dto.data);
+if (!parsed.success) throw new BadRequestException(/* ... */);
+await this.prisma.homebrewItem.create({ data: { data: parsed.data } });
+
+// ✗ Yanlış
+data: dto.data as object, // unvalidated
+```
+
+## Service Sorgu Pattern'leri
+
+### Tekil kaynak + policy
+
+```typescript
+const character = await this.prisma.character.findUnique({
+  where: { id },
+  include: {
+    campaign: { include: { members: { select: { userId: true } } } },
+  },
+});
+```
+
+Gereksiz `include: true` tüm graph — selective `select`.
+
+### Liste + cursor pagination
+
+```typescript
+const limit = Math.min(query.limit ?? 20, 50);
+const items = await this.prisma.homebrewItem.findMany({
+  where: {
+    status: 'PUBLISHED',
+    owner: { isActive: true },
+    ...(query.cursor && { id: { lt: query.cursor } }),
+  },
+  take: limit + 1,
+  orderBy: { createdAt: 'desc' },
+});
+const hasMore = items.length > limit;
+const data = hasMore ? items.slice(0, limit) : items;
+```
+
+Cursor alanı endpoint spec ile uyumlu (`docs/03`).
+
+### Deaktive owner filtresi
+
+USER listelerinde:
+```typescript
+where: { owner: { isActive: true } }
+```
+ADMIN bypass — conditional helper veya ayrı admin service method.
+
+### Search
+
+MVP: Prisma `contains` / `mode: 'insensitive'` (ILIKE). Full-text search MVP dışı.
+
+## Transaction Kullanımı
+
+Çok adımlı atomic işlemler:
+- Invite join + member insert
+- Role change + audit log
+- Homebrew publish + timestamp
+
+```typescript
+await this.prisma.$transaction(async (tx) => {
+  await tx.user.update({ where: { id }, data: { role: newRole } });
+  await tx.auditLog.create({ data: auditEntry });
+});
+```
+
+Audit log aynı transaction'da — iş başarısızsa log da yok.
+
+## Index ve Performans
+
+Yeni filtre/sort alanı → schema'da `@@index` — `docs/02` ile uyumlu. Policy lookup: `owner_id`, `campaign_id`, `user_id` indexed.
+
+N+1: liste + relation → `include` veya batch query; loop içinde `findUnique` anti-pattern.
+
+## Migration Disiplini
+
+| Ortam | Komut |
+| --- | --- |
+| Lokal geliştirme | `pnpm --filter api prisma migrate dev` |
+| CI/staging/prod | `prisma migrate deploy` |
+
+- Migration dosyaları commit edilir (`prisma/migrations/<timestamp>_<kebab-name>/`).
+- Production'da `migrate dev` **yasak**.
+- Custom SQL: istisnai; review zorunlu; Prisma migration SQL dosyasına yaz.
+
+Rollback: ters migration veya PITR — otomatik rollback yok (`docs/02` Bölüm 7.4).
+
+## Seed
+
+`prisma/seed.ts` + `seed-data/*.json` — official 5e reference [I-001].
+
+- Idempotent: upsert veya existence check (`docs/02` Bölüm 6.3).
+- `SEED_ADMIN_EMAIL` env ile ilk admin.
+- Migration PR'da seed hâlâ çalışıyor doğrula.
+
+## $queryRaw
+
+Varsayılan **yasak**. Edge case: parametreli, code review, ADR/not gerekçe. String interpolation **asla**.
+
+```typescript
+// ✗ Kesinlikle yanlış
+prisma.$queryRawUnsafe(`SELECT * FROM users WHERE email = '${email}'`);
+```
+
+## Prisma Client Tip Kullanımı
+
+`Prisma.CampaignGetPayload<{ include: ... }>` — policy context tipleri. `any` cast kaçın.
+
+Generated client commit edilmez — `prisma generate` CI'da.
+
+## Refresh Token / Audit Tabloları
+
+- `refresh_tokens`: hash only; plain token yok.
+- `audit_logs`: INSERT only; UPDATE/DELETE uygulama katmanında yok (17).
+
+## Soft Delete ve MVP Sınırları
+
+User deactivate `is_active = false` — hard delete yok. Campaign/character/homebrew admin DELETE hard delete (MVP). User erasure/right to delete post-MVP.
+
+## Prisma Middleware (Opsiyonel)
+
+Genelde gerekmez. `audit_logs` için UPDATE/DELETE engeli uygulama katmanında — Prisma middleware ile ek koruma isteğe bağlı, MVP zorunlu değil.
+
+## Seed ve Official Content
+
+`seed.ts` idempotent upsert. Official homebrew `source = OFFICIAL`, `status = PUBLISHED`. Seed admin user `SEED_ADMIN_EMAIL` env.
+
+JSON seed dosyaları: `prisma/seed-data/*.json` — büyük veri commit edilir.
+
+## Migration İsimlendirme
+
+`YYYYMMDDHHMMSS_add-campaign-setting-field/` — kebab-case açıklayıcı isim. Tek concern per migration tercih edilir.
+
+## Connection Pool ve Production
+
+`DATABASE_URL` connection limit env ile (hosting'e göre). Prisma log level production'da `error` — query log dev only.
+
+## Date/Time
+
+Tüm `DateTime` UTC. Client ISO string; server `new Date()` UTC persist.
+
+## Nullable FK Pattern
+
+`Character.campaignId` optional — disconnect:
+```typescript
+await this.prisma.character.update({
+  where: { id },
+  data: { campaignId: null },
+});
+```
+
+Assign önce membership verify.
+
+## Count ve Aggregate
+
+Admin dashboard yok (MVP) — gereksiz `count()` her listede yok. `hasMore` için `take: limit + 1` pattern yeterli.
+
+## Prisma Error Mapping
+
+- `P2002` unique violation → `409 Conflict`
+- `P2025` record not found → `404` (policy ile birleşince dikkat)
+- `P2003` FK violation → `400` veya `422`
+
+Global filter veya service catch — kullanıcıya generic mesaj, iç detay log only.
+
+## Test DB Lifecycle
+
+```typescript
+// test/setup.ts
+beforeAll: migrate deploy
+afterEach: truncate tables (sıra FK'ye uygun)
+```
+
+Factory: `test/factories/user.factory.ts`, `campaign.factory.ts`.
+
+## Anti-pattern'ler
+
+- ❌ Raw SQL / `$executeRaw` string concat
+- ❌ Repository abstraction katmanı
+- ❌ `snake_case` TS field (Prisma camelCase kullan)
+- ❌ JSONB write without Zod/validator
+- ❌ Migration'sız schema.prisma değişikliği commit
+- ❌ Production'da `migrate dev`
+- ❌ Loop içinde N+1 query
+- ❌ `limit` capsiz user input (max 50)
+- ❌ Deaktive owner içeriğini USER listesinde döndürme
+- ❌ Audit log UPDATE/DELETE
+- ❌ `$transaction` dışında çok adımlı partial update
+- ❌ Seed non-idempotent (duplicate key her run)
+
+## schema.prisma Konum
+
+Tek dosya `apps/api/prisma/schema.prisma` — monorepo root'ta değil. `prisma generate` CI build adımında.
+
+## Binary ve Büyük Veri
+
+DB'de file binary yok — yalnızca URL string (`banner_url`, `avatar_url`). Object storage dışında.
+
+---
+
+Detay: `docs/02_DATABASE_SCHEMA.md` Bölüm 1, 4–7, 9; `docs/04_BACKEND_SPEC.md` Bölüm 2; `docs/mimari-kararlar.md` [CODE-004], [SEC-010]

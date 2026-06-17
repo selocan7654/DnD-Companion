@@ -1,0 +1,286 @@
+---
+description: Auth modülü — JWT, refresh rotation, Argon2id, email verify, password reset, rate limit. apps/api/src/auth düzenlemelerinde.
+globs:
+  - "apps/api/src/auth/**"
+  - "apps/api/src/common/guards/jwt-auth.guard.ts"
+  - "apps/api/src/common/guards/email-verified.guard.ts"
+  - "apps/api/src/auth/strategies/**"
+---
+
+# DnD Companion — Backend Auth
+
+Kimlik doğrulama `auth/` modülünde; token üretimi `tokens/token.service.ts`, Passport JWT `strategies/jwt.strategy.ts`. Güvenlik checklist → `03-security-baseline.mdc` (tekrarlanmaz).
+
+## Token Mimarisi [SEC-004]
+
+| Token | Ömür | Saklama |
+| --- | --- | --- |
+| Access JWT | 15 dk | İstemci memory; `Authorization: Bearer` |
+| Refresh | 30 gün | `httpOnly`, `Secure`, `SameSite=Strict` cookie; hash DB'de |
+
+Access payload: `{ sub, role, emailVerified, iat, exp }` — PII minimum. HS256, `JWT_ACCESS_SECRET`.
+
+```typescript
+// ✓ Doğru — refresh cookie set
+res.cookie('refreshToken', token, {
+  httpOnly: true,
+  secure: process.env.NODE_ENV !== 'development',
+  sameSite: 'strict',
+  maxAge: 30 * 24 * 60 * 60 * 1000,
+});
+
+// ✗ Yanlış — access token response body'de kalıcı depolama önerisi veya localStorage
+return { accessToken, refreshToken }; // refresh body'de dönme
+```
+
+## JwtAuthGuard ve @Public
+
+Tüm route'lar varsayılan korumalı. Public: `@Public()` — register, login, refresh, verify-email, password-reset, `reference/*` read.
+
+```typescript
+// ✓ Doğru — jwt.strategy validate
+async validate(payload: { sub: string; role: string }) {
+  const user = await this.prisma.user.findUnique({
+    where: { id: payload.sub },
+    select: { id: true, email: true, username: true, role: true, isActive: true, emailVerifiedAt: true },
+  });
+  if (!user || !user.isActive) throw new UnauthorizedException();
+  return user;
+}
+
+// ✗ Yanlış — payload'a güvenip DB kontrolü atlama
+async validate(payload) {
+  return { id: payload.sub, role: payload.role };
+}
+```
+
+Deaktive kullanıcı (`is_active = false`) login ve refresh'te reddedilir.
+
+## Refresh Rotation [SEC-005]
+
+Her `POST /auth/refresh`: yeni access + yeni refresh üret; eski refresh hash invalidate.
+
+Reuse detection: geçersiz/tekrar kullanılan refresh → kullanıcının **tüm** refresh token'ları iptal (`logout all devices`).
+
+```typescript
+// ✓ Doğru — rotation
+const stored = await this.findValidRefreshToken(hash);
+if (!stored) {
+  await this.revokeAllUserRefreshTokens(userId); // reuse
+  throw new UnauthorizedException();
+}
+await this.revokeRefreshToken(stored.id);
+const newPair = await this.issueTokenPair(user);
+
+// ✗ Yanlış — aynı refresh token'ı yeniden kullanılabilir bırakma
+return { accessToken: this.signAccess(user) }; // refresh rotate yok
+```
+
+Logout: refresh revoke + cookie clear. Password reset confirm: tüm refresh iptal.
+
+## Şifre [SEC-001], [SEC-002]
+
+- Hash: **Argon2id** (`memory=19MB, iterations=2, parallelism=1`).
+- Politika: min 8 karakter; karmaşıklık kuralı yok.
+- `password_hash` hiçbir response/DTO/log'da yok.
+
+```typescript
+// ✓ Doğru
+const passwordHash = await argon2.hash(dto.password, { type: argon2.argon2id, ... });
+// ✗ Yanlış
+const passwordHash = await bcrypt.hash(dto.password, 10);
+```
+
+## Login / Register Mesajları [SEC-003]
+
+Enumeration yok — her zaman genel mesaj:
+
+```typescript
+// ✓ Doğru
+throw new UnauthorizedException({
+  error: 'INVALID_CREDENTIALS',
+  message: 'Invalid email or password',
+});
+
+// ✗ Yanlış
+throw new NotFoundException('Email not found');
+throw new UnauthorizedException('Wrong password');
+```
+
+Register conflict: `409` + `EMAIL_ALREADY_EXISTS` / `USERNAME_TAKEN` (kayıt akışında kabul edilir).
+
+## Email Doğrulama
+
+Kayıt sonrası `email_verified_at = NULL`. Token hash DB'de; plain token email'de bir kez.
+
+`@RequireVerifiedEmail()` gerektiren eylemler: campaign/character/homebrew create, publish, collection write vb. — tam liste `docs/07_SECURITY_IMPLEMENTATION.md` Bölüm 4.
+
+Guard `403`:
+```typescript
+throw new ForbiddenException({
+  error: 'EMAIL_NOT_VERIFIED',
+  message: 'Please verify your email to perform this action',
+});
+```
+
+## Auth Endpoint Özeti
+
+| Path | Auth | Not |
+| --- | --- | --- |
+| `POST /auth/register` | Public | Argon2id; verification email |
+| `POST /auth/login` | Public | Cookie + access |
+| `POST /auth/refresh` | Cookie | Rotation |
+| `POST /auth/logout` | JWT | Revoke refresh |
+| `POST /auth/verify-email` | Public | Tek kullanımlık token |
+| `POST /auth/password-reset/*` | Public | Rate limited |
+
+Contract detayı → `docs/03_API_CONTRACTS.md` Bölüm 3.
+
+## Rate Limiting [SEC-011]
+
+Auth endpoint'leri: **5 req / 15 dk / IP** (Redis). Aşımda `429` + `RATE_LIMIT_EXCEEDED`.
+
+Login, register, password-reset request aynı bucket mantığı. Global API limit ayrı.
+
+## DTO Dosyaları
+
+`auth/dto/`: `register.dto.ts`, `login.dto.ts`, `verify-email.dto.ts`, `password-reset-*.dto.ts`. `class-validator` + İngilizce validation mesajları (filter `details`'a map eder).
+
+## TokenService Sorumluluğu
+
+- Access sign/verify
+- Refresh üretimi (crypto random), hash (SHA-256 veya spec'teki algoritma), DB persist
+- Revoke tek / revoke all
+- Scheduled cleanup expired tokens
+
+Controller ince kalır — `AuthService` orchestration, `TokenService` token lifecycle.
+
+## Decorator Kullanımı (common/)
+
+| Decorator | Etki |
+| --- | --- |
+| `@Public()` | JwtAuthGuard skip |
+| `@RequireVerifiedEmail()` | EmailVerifiedGuard enforce |
+| `@CurrentUser()` | `req.user` inject |
+
+`EmailVerifiedGuard` global `APP_GUARD`; metadata yoksa geçer.
+
+## Test Zorunlulukları
+
+Auth değişikliğinde integration test:
+- Login başarı/hata (genel mesaj assert)
+- Refresh rotation + reuse → tüm token iptal
+- Deaktive user login red
+- Email verify → `emailVerifiedAt` set
+- Password reset → refresh iptal
+
+Coverage hedefi: `apps/api/src/auth/` ≥ %95 (`04-quality-gates.mdc`).
+
+## Register Akışı
+
+1. DTO validate (email, username, password min 8)
+2. Unique email/username kontrol → `409` ayrı kodlar
+3. Argon2id hash → `users` insert, `email_verified_at = NULL`
+4. Verification token üret → hash DB → email gönder
+5. Access + refresh cookie döndür (kullanıcı hemen giriş yapabilir)
+
+Username/email case normalization: spec'teki kurala uy (genelde email lowercase trim).
+
+## Verify Email Akışı
+
+`POST /auth/verify-email` — body `{ token }`. Token hash karşılaştır; tek kullanım; expire kontrolü. Başarı: `email_verified_at = now()`, token invalidate.
+
+## Password Reset Akışı
+
+**Request:** email alır; kullanıcı yoksa bile aynı genel success response (enumeration). Token hash DB; email gönder.
+
+**Confirm:** token + `newPassword` validate; hash güncelle; **tüm refresh revoke**; reset token invalidate.
+
+## Logout
+
+`POST /auth/logout` — auth gerekli. Mevcut refresh cookie hash revoke; `clearCookie`. Opsiyonel: tüm cihaz logout ayrı endpoint değil (MVP) — reuse detection zaten tüm token iptal eder.
+
+## CSRF ve Refresh Cookie [SEC-008]
+
+Refresh yalnızca `SameSite=Strict` cookie — cross-site istek cookie taşımaz. `/auth/refresh` Bearer gerektirmez. Diğer endpoint'ler cookie kullanmaz.
+
+```typescript
+// ✓ Doğru — refresh handler cookie'den okur
+const refreshToken = req.cookies?.refreshToken;
+
+// ✗ Yanlış — refresh body'den
+const { refreshToken } = dto;
+```
+
+## auth.module.ts Bağımlılıkları
+
+```typescript
+@Module({
+  imports: [
+    PassportModule.register({ defaultStrategy: 'jwt' }),
+    JwtModule.register({ /* access secret, 15m */ }),
+    PrismaModule,
+    EmailModule,
+  ],
+  controllers: [AuthController],
+  providers: [AuthService, TokenService, JwtStrategy],
+  exports: [TokenService],
+})
+export class AuthModule {}
+```
+
+## JwtModule vs TokenService
+
+- `JwtModule` / `JwtService`: access token sign/verify (15 dk)
+- `TokenService`: refresh lifecycle, DB persist, rotation
+
+Ayrı secret: `JWT_ACCESS_SECRET` vs `JWT_REFRESH_SECRET` (veya refresh opaque token — spec'teki modele uy).
+
+## EmailVerifiedGuard Davranışı
+
+Public route + `@RequireVerifiedEmail()` birlikte kullanılmaz. Public'de user yok → guard pass. Authenticated ama unverified → `403`.
+
+Verified user read (ör. `GET /campaigns`) — `@RequireVerifiedEmail()` **yok**; yalnızca write/create.
+
+## Auth Response Shape
+
+Login/register success:
+```typescript
+return {
+  data: {
+    accessToken,
+    user: { id, username, role, emailVerifiedAt }, // email yalnızca self context
+  },
+};
+```
+
+`password_hash` asla. Refresh cookie `Set-Cookie` header — body'de değil.
+
+## Scheduled Token Cleanup
+
+Expired `refresh_tokens` kayıtları cron ile silinir — DB şişmesini önler. Detay → `docs/04` Bölüm 12.
+
+## Anti-pattern'ler
+
+- ❌ Access/refresh token localStorage önerisi veya response'ta refresh plain text
+- ❌ JWT'de email/password veya gereksiz PII
+- ❌ Refresh rotation veya reuse detection atlama
+- ❌ bcrypt/scrypt ile Argon2id yerine geçme (ADR yoksa)
+- ❌ Login'de "user not found" vs "wrong password" ayrımı
+- ❌ Verification/reset token'ı plain DB'de saklama
+- ❌ Auth endpoint'lerinde rate limit bypass
+- ❌ Password reset'te refresh bırakma
+- ❌ Register'da email verification beklemeden publish izni (guard ile engelle)
+- ❌ `JwtStrategy` validate'de her istekte gereksiz full user graph
+
+## Username Uniqueness
+
+Register ve profil update'te case-insensitive unique check — DB unique index + service normalize.
+
+## Brute Force Notu
+
+Rate limit Redis key: `ratelimit:auth:${ip}` — TTL 15 dk sliding veya fixed window (implementasyon spec'te).
+
+---
+
+Detay: `docs/07_SECURITY_IMPLEMENTATION.md` Bölüm 2–4, 8, 10; `docs/03_API_CONTRACTS.md` Bölüm 3; `docs/mimari-kararlar.md` [SEC-001]–[SEC-005], [A-001]–[A-006]

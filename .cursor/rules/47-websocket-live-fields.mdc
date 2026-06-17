@@ -1,0 +1,332 @@
+---
+description: Step-by-step procedure for DM Screen live fields via Socket.io (gateway, PATCH /live, client hook, Redis adapter). Use when implementing character HP/conditions/death saves real-time sync, join-campaign rooms, or WebSocket events.
+---
+
+# WebSocket Live Fields — Procedure
+
+Real-time scope is **narrow**: DM Screen live fields only (HP, temp HP, conditions, death saves) + campaign member join/leave notifications. No dice, initiative, or combat tracker (MVP out).
+
+Contract: `docs/03_API_CONTRACTS.md` Bölüm 14. Backend gateway: `docs/04_BACKEND_SPEC.md` Bölüm 9. FE client: `docs/05_FRONTEND_SPEC.md` Bölüm 8. Glob: `16-backend-websocket.mdc`.
+
+## Step 0: Preconditions
+
+- [ ] Character live field PATCH endpoint exists: `PATCH /characters/:id/live` (`docs/03` Bölüm 7).
+- [ ] Campaign membership model working (DM + `campaign_members`).
+- [ ] Redis running for adapter (`docker compose up -d`).
+- [ ] Access token in memory on client — WS auth via handshake `auth.token`.
+
+Load: `docs/03_API_CONTRACTS.md` Bölüm 14, `docs/04_BACKEND_SPEC.md` Bölüm 9, `docs/05_FRONTEND_SPEC.md` Bölüm 8, `docs/06_SCREEN_CATALOG.md` Grup 3 (S-DM-SCREEN).
+
+## Step 1: Event and Room Contract
+
+### Room naming
+
+```
+campaign:<campaignId>
+```
+
+### Client → Server
+
+| Event | Payload |
+| --- | --- |
+| `join-campaign` | `{ campaignId: string }` |
+| `leave-campaign` | `{ campaignId: string }` |
+
+### Server → Client (room broadcast)
+
+| Event | Payload |
+| --- | --- |
+| `character:live-update` | single or batch fields (see below) |
+| `campaign:member-joined` | `{ userId, username, avatarUrl }` |
+| `campaign:member-left` | `{ userId, username }` |
+
+### Live field names
+
+`hitPointsCurrent`, `temporaryHitPoints`, `deathSaves`, `conditions`
+
+**Preferred payload** (batch — less network overhead):
+
+```json
+{
+  "characterId": "uuid",
+  "characterName": "Thorin Ironforge",
+  "fields": {
+    "hitPointsCurrent": 25,
+    "conditions": ["Poisoned"]
+  },
+  "updatedBy": "player42"
+}
+```
+
+Single-field format also accepted (`field` + `value`). Support both in FE reducer.
+
+### Error event
+
+```json
+{
+  "event": "join-campaign",
+  "message": "Not a member of this campaign",
+  "code": "FORBIDDEN"
+}
+```
+
+## Step 2: Gateway — Connection Auth
+
+File: `apps/api/src/websocket/websocket.gateway.ts`
+
+```typescript
+async handleConnection(client: Socket) {
+  try {
+    const token = client.handshake.auth?.token;
+    if (!token) throw new Error('No token');
+
+    const payload = this.jwtService.verify(token, {
+      secret: process.env.JWT_ACCESS_SECRET,
+    });
+    const user = await this.prisma.user.findUnique({
+      where: { id: payload.sub },
+      select: { id: true, username: true, role: true, isActive: true },
+    });
+    if (!user || !user.isActive) throw new Error('Invalid user');
+
+    client.data.userId = user.id;
+    client.data.username = user.username;
+  } catch {
+    client.disconnect(true);
+  }
+}
+```
+
+Invalid token → disconnect immediately (no HTTP 401 on WS).
+
+## Step 3: Gateway — join-campaign Authorization
+
+```typescript
+@SubscribeMessage('join-campaign')
+async handleJoinCampaign(client: Socket, payload: { campaignId: string }) {
+  const userId = client.data.userId;
+  if (!userId) return;
+
+  const campaign = await this.prisma.campaign.findUnique({
+    where: { id: payload.campaignId },
+    include: { members: { select: { userId: true } } },
+  });
+
+  if (!campaign) {
+    client.emit('error', { event: 'join-campaign', message: 'Campaign not found', code: 'NOT_FOUND' });
+    return;
+  }
+
+  const isMember =
+    campaign.ownerId === userId ||
+    campaign.members.some((m) => m.userId === userId);
+
+  if (!isMember) {
+    client.emit('error', { event: 'join-campaign', message: 'Not a member of this campaign', code: 'FORBIDDEN' });
+    return;
+  }
+
+  client.join(`campaign:${payload.campaignId}`);
+  client.emit('joined-campaign', { campaignId: payload.campaignId });
+}
+```
+
+`leave-campaign` → `client.leave(`campaign:${id}`)`.
+
+## Step 4: Redis Adapter (Horizontal Scale)
+
+`apps/api/src/websocket/websocket.module.ts`:
+
+```typescript
+async afterInit(server: Server) {
+  const pubClient = createClient({ url: process.env.REDIS_URL });
+  const subClient = pubClient.duplicate();
+  await Promise.all([pubClient.connect(), subClient.connect()]);
+  server.adapter(createAdapter(pubClient, subClient));
+}
+```
+
+Required for multi-instance broadcast ([TS-NNN] stack pin).
+
+## Step 5: Service — PATCH Live + Broadcast
+
+In `CharactersService.updateLiveFields`:
+
+1. Load character with campaign relation.
+2. `CharacterPolicy.canWrite` or DM-specific live-update rule (`docs/01` live fields).
+3. Prisma update allowed columns only.
+4. Inject `WebsocketGateway` → `broadcastLiveUpdate`.
+
+```typescript
+broadcastLiveUpdate(campaignId: string, data: LiveUpdatePayload) {
+  this.server.to(`campaign:${campaignId}`).emit('character:live-update', data);
+}
+```
+
+Member join/remove in `CampaignsService` → `broadcastMemberJoined` / `broadcastMemberLeft`.
+
+**Order:** DB commit success **then** broadcast — avoid ghost WS state on rollback.
+
+## Step 6: Frontend Socket Client
+
+`apps/web/src/lib/socket.ts` (`docs/05` Bölüm 8):
+
+```typescript
+socket = io(window.location.origin, {
+  auth: { token: accessToken },
+  transports: ['websocket'],
+});
+```
+
+Connect on DM Screen mount; disconnect on unmount or logout.
+
+## Step 7: useWebSocket Hook
+
+`apps/web/src/hooks/useWebSocket.ts`:
+
+```typescript
+useEffect(() => {
+  if (!campaignId || !accessToken) return;
+
+  const socket = connectSocket(accessToken);
+  socket.emit('join-campaign', { campaignId });
+
+  socket.on('character:live-update', (data) => {
+    dispatch(
+      charactersApi.util.updateQueryData('getCharacter', data.characterId, (draft) => {
+        if (data.fields) Object.assign(draft.data, data.fields);
+        else draft.data[data.field] = data.value;
+      }),
+    );
+  });
+
+  return () => {
+    socket.emit('leave-campaign', { campaignId });
+    socket.off('character:live-update');
+  };
+}, [campaignId, accessToken]);
+```
+
+Invalidate campaign tags on `member-joined` / `member-left`.
+
+## Step 8: DM Screen UI Wiring
+
+Per `docs/06_SCREEN_CATALOG.md` S-DM-SCREEN:
+
+- `CharacterLiveCard` displays HP bar, conditions, death saves.
+- Quick edit triggers `PATCH /characters/:id/live` — WS updates other clients.
+- DM-only route — non-DM → 404.
+
+## Step 9: Integration Tests
+
+`docs/08_TESTING_STRATEGY.md` + Faz 4 oturum 4.6:
+
+```
+[ ] join-campaign rejects non-member (error event)
+[ ] join-campaign accepts DM and player
+[ ] live PATCH persists DB and emits character:live-update to room
+[ ] invalid handshake token disconnects
+```
+
+Use `socket.io-client` in test or gateway unit tests with mocked `server.to().emit`.
+
+## Step 10: Security Checklist
+
+```
+[ ] No room join without membership check ([AUTH-004])
+[ ] Token from handshake.auth only — not query.userId
+[ ] Live update only for authorized character/campaign
+[ ] No PII/token in WS logs
+[ ] CORS origin = FRONTEND_URL
+```
+
+## Step 11: Pre-PR Verification
+
+```bash
+pnpm lint && pnpm typecheck
+pnpm --filter api test -- --ci
+pnpm --filter web test -- --ci
+```
+
+Manual: two browsers — DM edits HP, player card updates without refresh.
+
+## Anti-patterns
+
+- ❌ Broadcasting before DB commit
+- ❌ Client emits live field changes directly (server must validate PATCH)
+- ❌ Joining room without authorization
+- ❌ localStorage token for WS auth
+- ❌ Adding dice/initiative events (MVP scope)
+- ❌ kebab-case violation (`joinCampaign` instead of `join-campaign`)
+
+## Member Join/Leave Broadcast
+
+When player joins via invite or removed by DM:
+
+```typescript
+// CampaignsService after member add
+this.websocketGateway.broadcastMemberJoined(campaignId, {
+  userId: member.userId,
+  username: member.user.username,
+  avatarUrl: member.user.avatarUrl,
+});
+```
+
+Emit **after** DB transaction commits.
+
+## Token Refresh During Session
+
+Access token expires (15 min). On refresh, reconnect socket with new token:
+
+```typescript
+// After auth slice receives new accessToken
+disconnectSocket();
+connectSocket(newAccessToken);
+socket.emit('join-campaign', { campaignId });
+```
+
+Document in `docs/05` if refresh flow changes.
+
+## DM Screen REST + WS Dual Path
+
+| Action | Channel |
+| --- | --- |
+| User edits live field | REST `PATCH /characters/:id/live` |
+| Other clients update | WS `character:live-update` |
+| Initial page load | REST GET characters — not WS history |
+
+WS is push-only for live fields — no event sourcing replay in MVP.
+
+## Scaling Notes
+
+Redis adapter mandatory when `instances > 1`. Local dev single instance works without adapter but keep code path for parity.
+
+## Environment Variables
+
+```
+REDIS_URL=redis://localhost:6379
+JWT_ACCESS_SECRET=...  # same as HTTP JWT verify
+FRONTEND_URL=http://localhost:5173  # gateway CORS
+```
+
+## Troubleshooting
+
+| Symptom | Check |
+| --- | --- |
+| WS connects then disconnects | Token expired/invalid; `isActive` user |
+| Updates only on one tab | Redis adapter not connected |
+| Player sees DM notes | Wrong route guard — not WS issue |
+| CORS error | `FRONTEND_URL` matches Vite origin |
+| Event not received | Client joined room? `join-campaign` ack `joined-campaign` |
+
+## Related How-tos
+
+| Task | How-to |
+| --- | --- |
+| REST live endpoint | `@40-add-new-endpoint` |
+| Policy for live write | `@43-add-authorization-policy` |
+| DM Screen UI | `@41-add-new-screen` |
+
+---
+
+Detay: `docs/03_API_CONTRACTS.md` Bölüm 14; `docs/04_BACKEND_SPEC.md` Bölüm 9; `docs/05_FRONTEND_SPEC.md` Bölüm 8; `docs/06_SCREEN_CATALOG.md` Grup 3; `docs/07_SECURITY_IMPLEMENTATION.md` Bölüm 6

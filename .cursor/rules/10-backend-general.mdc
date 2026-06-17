@@ -1,0 +1,279 @@
+---
+description: NestJS backend genel mimari — modül yapısı, request pipeline, exception/logging, env. apps/api altında her TS düzenlemesinde.
+globs:
+  - "apps/api/**/*.ts"
+  - "!apps/api/**/*.spec.ts"
+  - "!apps/api/test/**"
+---
+
+# DnD Companion — Backend Genel
+
+NestJS API (`apps/api/`) tek deployable backend'dir; FE build statik serve edilir. Bu kural modül-özel dosyalar (11–17) ile birlikte yüklenir — ortak pipeline ve katman sınırları burada.
+
+## Monorepo Konumu
+
+```
+apps/api/src/
+  main.ts, app.module.ts
+  auth/ users/ campaigns/ characters/ homebrew/
+  collections/ reference/ admin/ uploads/
+  websocket/ email/
+  common/   # guards, policies, filters, prisma
+  config/
+apps/api/prisma/
+apps/api/test/
+```
+
+Kaynak tipi başına bir modül ([CODE-003]); repository katmanı yok — Prisma doğrudan service'e inject edilir.
+
+## Request Pipeline
+
+Her HTTP isteği sırasıyla:
+
+```
+/api/v1 prefix
+→ LoggingInterceptor
+→ JwtAuthGuard (@Public değilse)
+→ EmailVerifiedGuard (@RequireVerifiedEmail varsa)
+→ RolesGuard (@Roles varsa)
+→ ValidationPipe (global)
+→ Controller → Service (policy + Prisma)
+→ GlobalExceptionFilter (hata)
+```
+
+```typescript
+// ✓ Doğru — bootstrap main.ts
+app.setGlobalPrefix('api/v1');
+app.useGlobalPipes(
+  new ValidationPipe({
+    whitelist: true,
+    forbidNonWhitelisted: true,
+    transform: true,
+  }),
+);
+app.useGlobalFilters(new GlobalExceptionFilter());
+app.enableCors({ origin: process.env.FRONTEND_URL, credentials: true });
+app.use(cookieParser());
+app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
+
+// ✗ Yanlış — validation gevşetme veya prefix atlama
+app.useGlobalPipes(new ValidationPipe({ whitelist: false }));
+```
+
+Global guard'lar `APP_GUARD` ile kayıtlıdır; endpoint bazında tekrar `@UseGuards(JwtAuthGuard)` yazma — yalnızca ek/istisna guard gerekirse kullan.
+
+## Katman Sorumlulukları
+
+| Katman | Yapar | Yapmaz |
+| --- | --- | --- |
+| Controller | Route, DTO binding, service delegasyonu | İş mantığı, Prisma, policy if zinciri |
+| Service | İş kuralı, policy çağrısı, Prisma | HTTP status seçimi (exception fırlatır) |
+| DTO | `class-validator` body/query | Response şekillendirme |
+| Policy | `can(user, action, resource)` | DB yazma |
+| `common/` | Paylaşılan guard, filter, pipe | Domain iş mantığı |
+
+## Modül Pattern
+
+```typescript
+// ✓ Doğru — ince modül
+@Module({
+  imports: [PrismaModule],
+  controllers: [CampaignsController],
+  providers: [CampaignsService],
+  exports: [CampaignsService], // başka modül inject edecekse
+})
+export class CampaignsModule {}
+
+// ✗ Yanlış — controller içinde Prisma
+@Get(':id')
+async findOne(@Param('id') id: string) {
+  return this.prisma.campaign.findUnique({ where: { id } });
+}
+```
+
+`PrismaModule` `@Global()` — her modülde import etmeye gerek yok (explicit import da kabul edilir).
+
+## Response ve Hata Envelope
+
+Başarı: `{ data }` veya liste için `{ data, nextCursor, hasMore }`. Hata: `{ statusCode, error, message, details? }` — `error` SCREAMING_SNAKE veya HTTP status adı; `message` İngilizce kullanıcı metni.
+
+`GlobalExceptionFilter` tüm `HttpException` ve validation hatalarını bu envelope'a çevirir. Controller ham exception string döndürmez.
+
+```typescript
+// ✓ Doğru — iş kuralı exception
+throw new ForbiddenException({
+  error: 'EMAIL_NOT_VERIFIED',
+  message: 'Please verify your email to perform this action',
+});
+
+// ✗ Yanlış — düz string, envelope dışı
+throw new ForbiddenException('Lütfen email doğrula');
+```
+
+Detaylı status tablosu → `docs/03_API_CONTRACTS.md` Bölüm 2.
+
+## Validation Stratejisi
+
+- Request body/query: `class-validator` DTO + global `ValidationPipe`.
+- Homebrew `data` JSONB: service katmanında `packages/shared` Zod şeması (`safeParse` → `400` + `details`).
+- UUID path param: `ParseUUIDPipe` veya `common/pipes/parse-uuid.pipe.ts`.
+- Liste query: ortak `ListQueryDto` — `limit` max 50, cursor pagination.
+
+## Logging
+
+Structured JSON (Pino veya Nest Logger). Her istekte `requestId`, `method`, `url`, `statusCode`, `duration`, `userId` (varsa).
+
+**Asla loglama:** `password`, `password_hash`, `accessToken`, `refreshToken`, `token_hash`. Production'da `email` maskelenir. Pino `redact` kullan.
+
+```typescript
+// ✓ Doğru — redact config
+pinoHttp: {
+  redact: ['req.headers.authorization', 'req.body.password', 'req.body.newPassword'],
+}
+
+// ✗ Yanlış
+this.logger.log(`Login attempt for ${email} with token ${token}`);
+```
+
+## Ortak Altyapı Servisleri
+
+| Modül | Rol |
+| --- | --- |
+| `email/` | SMTP (Gmail); doğrulama ve şifre sıfırlama |
+| `uploads/` | S3-uyumlu presigned URL; MIME/boyut kontrolü |
+| `config/env.validation.ts` | Startup'ta env Zod/Joi doğrulama |
+
+Scheduled job: refresh token temizliği (expired kayıtlar). Cron detayı → `docs/04_BACKEND_SPEC.md` Bölüm 12.
+
+## Env ve Bootstrap
+
+- Secret'lar yalnızca env var; `.env` commit edilmez.
+- `DATABASE_URL`, `REDIS_URL`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `FRONTEND_URL` zorunlu set — eksik env ile boot fail.
+- Static assets: `apps/web/dist` → Nest `useStaticAssets` (SPA fallback ayrı handler).
+
+## Test Konumu
+
+Integration testler `apps/api/test/` veya `*.controller.spec.ts` (supertest + gerçek DB). Unit testler modül yanında. Glob bu kuralı test dosyalarından hariç tutar; test stratejisi → `35-test` (sonraki paketler).
+
+## Yeni Kod Checklist
+
+```
+[ ] Doğru modül klasörü ([CODE-003])
+[ ] Controller ince; mantık service'de
+[ ] DTO validation; JSONB için Zod (homebrew)
+[ ] Policy service'de ([AUTH-003]); 03 güvenlik checklist
+[ ] Response envelope uyumlu
+[ ] Hassas alan loglanmıyor
+[ ] Endpoint contract docs/03 ile uyumlu (path değiştiyse doc güncelle)
+```
+
+## GlobalExceptionFilter
+
+Tüm yakalanmamış hatalar JSON envelope döner. Validation `400`: `message` array → `details[{ field, issue }]`.
+
+```typescript
+// ✓ Doğru — filter çıktısı
+response.status(statusCode).json({
+  statusCode,
+  error,
+  message,
+  ...(details && { details }),
+});
+
+// ✗ Yanlış — Nest default HTML/stack trace production'da
+throw new Error('Something broke');
+```
+
+`500` → Sentry + structured log; stack trace client'a gitmez.
+
+## Custom Business Exception'lar
+
+`common/exceptions/` — domain-specific `HttpException` alt sınıfları:
+
+| Exception | Status | Kullanım |
+| --- | --- | --- |
+| `LastAdminException` | 422 | Son admin rol düşürme |
+| `AlreadyMemberException` | 409 | Duplicate campaign join |
+| `InvalidInviteTokenException` | 404 | Geçersiz invite |
+| `EmailNotVerifiedException` | 403 | Guard alternatifi |
+
+Mesajlar İngilizce; `error` kodu SCREAMING_SNAKE tercih edilir.
+
+## Pagination ve Liste Konvansiyonu
+
+Cursor-based; offset pagination yok. Query: `cursor`, `limit` (default 20, max 50), `sort`, `order`, `search`.
+
+Service dönüşü controller'a `{ data, nextCursor, hasMore }` — `nextCursor` son item id veya spec'teki cursor alanı.
+
+## Rate Limiting (Global)
+
+Auth endpoint'leri ayrı bucket (11). Genel API: Redis tabanlı global limit — `429` + `Retry-After`. Implementasyon → `docs/03` Bölüm 15.
+
+## common/ Klasör Sınırları
+
+```
+common/
+  guards/       → 11, 12, 17
+  decorators/   → 11, 12, 14
+  policies/     → 12
+  filters/      → bu kural (exception)
+  interceptors/ → logging
+  pipes/        → ParseUUID
+  prisma/       → 15
+  dto/          → ListQueryDto
+  exceptions/   → business errors
+```
+
+Domain modülü `common/` içine taşınmaz — yalnızca gerçekten çapraz concern.
+
+## Glob Örtüşmesi (Bilinçli)
+
+Aynı dosya birden fazla kural tetikleyebilir:
+
+| Dosya | Kurallar |
+| --- | --- |
+| `*.controller.ts` | 10 + 14 |
+| `*.service.ts` | 10 + 13 + 15 |
+| `common/policies/*` | 12 |
+| `auth/*` | 10 + 11 |
+
+Agent yalnızca ilgili concern bölümünü uygular; çelişki olursa **docs kazanır**.
+
+## SPA Static Serve
+
+`main.ts` FE `dist` serve eder; API path `/api/v1` altında. SPA deep link fallback — Nest exception filter veya dedicated middleware (spec'teki pattern). Ayrı CDN/Vercel yok.
+
+## Sentry Entegrasyonu
+
+`500` ve beklenmeyen exception'lar Sentry'ye (ücretsiz tier). PII scrub: email, token, password. Breadcrumb'ta request body password alanı yok.
+
+## Anti-pattern'ler
+
+- ❌ Raw SQL / string concatenation DB erişimi — yalnızca Prisma Client
+- ❌ İş mantığı veya 20+ satır yetki if'i controller'da
+- ❌ Ayrı repository katmanı ekleme
+- ❌ `ValidationPipe` whitelist kapalı veya global filter bypass
+- ❌ Türkçe API `message` veya hata metni
+- ❌ Guard'sız yazma endpoint'i (`POST`/`PATCH`/`PUT`/`DELETE`)
+- ❌ Spec tablosunu rule veya yoruma kopyalama
+- ❌ `catch` bloğunda hassas veri loglama
+- ❌ Offset/limit pagination (`?page=2`) — cursor kullan
+- ❌ Domain exception'ı controller'da string throw
+
+## LoggingInterceptor
+
+Request başında `requestId` (uuid) atanır; response bitince duration loglanır. Correlation: downstream service loglarında aynı `requestId`.
+
+Health check endpoint (`/health` veya `/api/v1/health`) MVP opsiyonel — log noise düşük tutulur.
+
+## Email Module (Cross-Cutting)
+
+`email/` auth dışında domain'den çağrılmaz. Gelecekte bildirim email'i post-MVP.
+
+## Versioning
+
+API `/api/v1` — breaking change yeni major prefix (post-MVP). Şimdilik tek versiyon.
+
+---
+
+Detay: `docs/04_BACKEND_SPEC.md` Bölüm 1–3, 6–8, 12–13; `docs/03_API_CONTRACTS.md` Bölüm 1–2, 15; `docs/mimari-kararlar.md` [CODE-003]

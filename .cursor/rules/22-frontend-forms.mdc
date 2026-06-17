@@ -1,0 +1,266 @@
+---
+description: React Hook Form + Zod — form validation, character builder tabs, auto-save, homebrew conditional fields. Form ve builder düzenlemelerinde.
+globs:
+  - "apps/web/src/**/*Form*.tsx"
+  - "apps/web/src/pages/**/new/**"
+  - "apps/web/src/pages/**/edit/**"
+  - "apps/web/src/features/**/builder/**"
+---
+
+# DnD Companion — Frontend Forms
+
+Tüm formlar **React Hook Form** + **Zod** (`@hookform/resolvers/zod`). Şemalar `packages/shared` tek kaynak ([CODE-002]) — FE'de duplicate validation yazma.
+
+RTK mutation çağrıları → `23-frontend-rtk-query.mdc`; shadcn form UI → `24-frontend-components.mdc`.
+
+## Temel Form Pattern
+
+```typescript
+// ✓ Doğru — shared Zod + RHF
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { createCampaignSchema, type CreateCampaignInput } from '@dnd-companion/shared';
+
+function CampaignCreatePage() {
+  const form = useForm<CreateCampaignInput>({
+    resolver: zodResolver(createCampaignSchema),
+    defaultValues: { name: '', description: '', setting: '' },
+  });
+  const [createCampaign, { isLoading }] = useCreateCampaignMutation();
+
+  const onSubmit = async (data: CreateCampaignInput) => {
+    const result = await createCampaign(data);
+    if ('data' in result) navigate(`/campaigns/${result.data.id}`);
+  };
+
+  return (
+    <Form {...form}>
+      <form onSubmit={form.handleSubmit(onSubmit)} noValidate>
+        {/* FormField + shadcn Input */}
+        <Button type="submit" disabled={isLoading} aria-busy={isLoading}>
+          Create Campaign
+        </Button>
+      </form>
+    </Form>
+  );
+}
+
+// ✗ Yanlış — inline Yup veya hand-rolled validation
+const [errors, setErrors] = useState({});
+if (!name) setErrors({ name: 'Required' });
+```
+
+## shadcn/ui Form Bileşenleri
+
+`Form`, `FormField`, `FormItem`, `FormLabel`, `FormControl`, `FormMessage` — label/input `id` eşlemesi otomatik. Hata: `aria-invalid`, `aria-describedby` → `25-frontend-a11y.mdc`.
+
+Submit loading: `disabled` + `aria-busy="true"`. Required alanlar: `aria-required="true"`.
+
+## Backend Validation Eşlemesi
+
+API `400` + `details[{ field, issue }]`:
+
+```typescript
+// ✓ Doğru — RTK error → form field
+if (isFetchBaseQueryError(error) && error.data?.details) {
+  error.data.details.forEach(({ field, issue }) => {
+    if (field) form.setError(field as keyof FormValues, { message: issue });
+  });
+  focusFirstError();
+}
+
+// ✗ Yanlış — generic toast only (alan hatası kaybolur)
+toast.error('Validation failed');
+```
+
+`issue` metinleri backend'den İngilizce gelir; UI'da olduğu gibi göster.
+
+## Character Builder — Tab Pattern (S-CHAR-BUILDER)
+
+**Wizard değil** — guided tab UI; tüm tab'lar **aynı karakter kaydını** paylaşır. Ayrı form state veya localStorage draft yok.
+
+### Tab Yapısı
+
+| Tab | Bileşen | Güncellenen alanlar (özet) |
+| --- | --- | --- |
+| 1. Race & Class | `RaceClassTab` | race, className, subclass, level |
+| 2. Ability Scores | `AbilityScoresTab` | abilityScores |
+| 3. Background | `BackgroundTab` | background, alignment, name, notes |
+| 4. Equipment | `EquipmentTab` | equipment, armorClass |
+| 5. Spells | `SpellsTab` | knownSpells, spellSlots |
+| 6. Review | `ReviewTab` | özet + HP türevleri |
+
+Alan detayı → `docs/06_SCREEN_CATALOG.md` S-CHAR-BUILDER; rule'da tablo genişletilmez.
+
+```typescript
+// ✓ Doğru — tek characterId, shared PATCH, Tabs
+function CharacterBuilderPage() {
+  const { id } = useParams(); // new → POST create sonra redirect /characters/:id
+  const { data: character } = useGetCharacterQuery(id!, { skip: !id });
+  const autoSave = useAutoSave(id!);
+
+  return (
+    <Tabs defaultValue="race-class">
+      <TabsList aria-label="Character builder steps">
+        <TabsTrigger value="race-class">Race & Class</TabsTrigger>
+        {/* ... */}
+      </TabsList>
+      <TabsContent value="race-class">
+        <RaceClassTab character={character} onChange={autoSave} />
+      </TabsContent>
+    </Tabs>
+  );
+}
+
+// ✗ Yanlış — tab başına ayrı useForm + final submit
+const [step, setStep] = useState(0);
+const forms = [useForm(), useForm(), ...];
+```
+
+### Auto-Save (Debounced PATCH)
+
+Kayıt butonu **yok** — blur/change'de debounced `PATCH`:
+
+```typescript
+// hooks/useAutoSave.ts — ✓ Doğru
+function useAutoSave(characterId: string) {
+  const [updateCharacter] = useUpdateCharacterMutation();
+  return useDebouncedCallback((data: Partial<CharacterUpdateInput>) => {
+    updateCharacter({ id: characterId, body: data });
+  }, 500);
+}
+
+// ✗ Yanlış — her keystroke anında mutation
+onChange={(e) => updateCharacter({ id, body: { name: e.target.value } })}
+```
+
+Optimistic update opsiyonel; hata → toast + önceki değere dön (veya refetch).
+
+### Yeni Karakter Akışı
+
+1. `/characters/new` → minimal create (veya boş shell POST).
+2. Redirect `/characters/:id` builder tab'larına.
+3. Auto-save aktif.
+
+Keyboard: tab list `ArrowLeft`/`ArrowRight` — `25-frontend-a11y.mdc`.
+
+### Point Buy / Ability Scores
+
+`AbilityScoresTab` içinde method toggle (standard array, point buy, manual) — seçim RHF `watch` ile; auto-save tüm `abilityScores` objesini PATCH eder. Validasyon shared Zod — toplam point budget backend ile uyumlu.
+
+### Review Tab
+
+Salt okunur özet + türetilmiş değerler (HP max, proficiency, speed). Hesaplama FE display-only; kaynak alanlar race/class/level'dan. Submit yok — auto-save diğer tab'lardan gelmiş olmalı.
+
+## Character Edit (S-CHAR-EDIT)
+
+Builder ile aynı tab pattern; route `/characters/:id/edit`. Mevcut kayıt yüklendikten sonra tab'lar enable.
+
+## Homebrew Form — Conditional `data`
+
+`type` seçildikten sonra alt form render:
+
+```typescript
+// ✓ Doğru — type-driven subform
+function HomebrewForm({ type }: { type: HomebrewType }) {
+  const schema = getHomebrewSchema(type); // shared
+  const form = useForm({ resolver: zodResolver(schema) });
+
+  return (
+    <>
+      <CommonHomebrewFields form={form} />
+      {type === 'SPELL' && <SpellDataFields form={form} />}
+      {type === 'MONSTER' && <MonsterDataFields form={form} />}
+      {/* FEAT, BACKGROUND, MAGIC_ITEM, SUBCLASS */}
+    </>
+  );
+}
+
+// ✗ Yanlış — tek flat form, type-specific Zod yok
+<Input name="data.damage" /> // tüm tiplerde
+```
+
+`data` JSONB backend'de shared Zod `safeParse` — FE şeması ile uyumlu kal.
+
+### Publish / Draft Toggle
+
+Homebrew edit: `status` DRAFT ↔ PUBLISHED ayrı mutation veya PATCH alanı. Publish öncesi client Zod tam validate — eksik alan varsa tab/section'a yönlendir.
+
+## Auth Formları
+
+Login, register, password reset: standart submit (auto-save yok). Login hata: genel `"Invalid email or password"` — enumeration yok ([SEC-003]).
+
+Register başarı → verify email yönlendirme mesajı (İngilizce).
+
+### Password Reset
+
+Request form: yalnızca email. Confirm form: query `?token=` + `newPassword` + confirm field — shared Zod `passwordResetConfirmSchema`. Token invalid → inline error, request link.
+
+## Profile Form
+
+`ProfilePage` (S-PROFILE): username, avatar upload. Email alanı read-only (sahip görür); başka kullanıcı profilinde email **render edilmez**. Avatar: `ImageUpload` purpose `avatar` → PATCH `avatarUrl`.
+
+## Debounce Hook
+
+```typescript
+// hooks/useDebounce.ts veya lodash/debounce — ✓ Doğru
+export function useDebouncedCallback<T extends (...args: never[]) => void>(fn: T, ms: number) {
+  return useMemo(() => debounce(fn, ms), [fn, ms]);
+}
+```
+
+Cleanup: `useEffect(() => () => debounced.cancel(), [debounced])` — unmount'ta pending PATCH iptal.
+
+## Email Doğrulama ve Form Disable
+
+`!isEmailVerified` iken create/submit butonları `disabled` + `Tooltip`: `"Please verify your email to perform this action"`. Form mount edilebilir; submit engellenir.
+
+## Campaign / Profile Formları
+
+Tek sayfa form — tab yok. Campaign create: submit → navigate detail. Profile: avatar upload entegrasyonu (`ImageUpload` + PATCH).
+
+## DM Notes (Inline Edit)
+
+DM Screen notları ayrı küçük form veya controlled textarea — `DmNote` CRUD mutation; auto-save debounce 500ms uygulanabilir.
+
+## Form State vs Server State
+
+| Veri | Kaynak |
+| --- | --- |
+| Kullanıcı girişi (anlık) | RHF `watch` / `getValues` |
+| Kayıtlı entity | RTK Query `useGet*Query` |
+| Submit sonrası | `invalidatesTags` veya `reset(data)` |
+
+`defaultValues`'ı query `data` ile `reset()` sync et — stale default önle.
+
+## Unsaved Changes (MVP)
+
+Character builder auto-save olduğu için `beforeunload` uyarısı **gerekmez**. Gelecekte draft form'larda eklenebilir (post-MVP).
+
+## Form Checklist
+
+```
+[ ] Zod şeması packages/shared'dan
+[ ] zodResolver + useForm tip güvenli
+[ ] Backend details → setError
+[ ] UI metinleri İngilizce
+[ ] Character builder: tab + auto-save, wizard değil
+[ ] Homebrew: type-conditional subform
+[ ] Submit loading aria-busy
+[ ] Email unverified → disabled + tooltip (yazma formları)
+```
+
+## Anti-pattern'ler
+
+- ❌ FE-only Zod şeması (shared bypass)
+- ❌ Character builder'da step wizard + final POST
+- ❌ localStorage form draft (token ile aynı XSS yüzeyi)
+- ❌ `register()` without resolver (manual validate)
+- ❌ `any` form values
+- ❌ Türkçe validation mesajı (client-side)
+- ❌ Controller'sız native `<form action>` POST
+- ❌ Homebrew `data` için `JSON.stringify` textarea hack
+
+---
+
+Detay: `docs/05_FRONTEND_SPEC.md` Bölüm 7, 10; `docs/06_SCREEN_CATALOG.md` S-CHAR-BUILDER, S-CHAR-EDIT, S-HOMEBREW-*; `packages/shared` Zod şemaları

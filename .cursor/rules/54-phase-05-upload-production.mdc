@@ -1,0 +1,486 @@
+---
+description: '[Faz 5] Dosya Yükleme, Profil ve Prodüksiyon Hazırlığı — 6 iterasyon/chat (upload BE+FE → profil → hata+Sentry → Docker+kalite → deaktivasyon+test → stabilizasyon). Mesajda "Faz 5 — İterasyon M" belirt.'
+---
+
+# Faz 5: Dosya Yükleme, Profil ve Prodüksiyon Hazırlığı
+
+## Goal
+
+Görsel yükleme (presign + client resize) dört `purpose` ile uçtan uca çalışır; profil sayfası (username, avatar, şifre) ve self-service deaktivasyon tamamlanır; `S-404`/`S-500` + Sentry (`SENTRY_DSN`) entegre olur; platform-agnostik production `Dockerfile` ile CI yeşil kalır — `[INF-OPEN-1]` kapanana kadar cloud deploy yok. Önkoşul: Faz 4 merge + insan gate. Detay: `docs/10_IMPLEMENTATION_ROADMAP.md` Bölüm 7 + §5.1–§5.6.
+
+## Feature branch (zorunlu)
+
+`48-git-phase-branch.mdc` prosedürünü uygula. **Faz 4 insan gate onayı + merge sonrası** `main`'den feature branch aç; her iterasyon merge sonrası yeni branch.
+
+| İterasyon | Chat opener | Branch örneği |
+| --- | --- | --- |
+| 1 | `Faz 5 — İterasyon 1: Upload presign + resize flow` | `feat/faz5-upload-presign` |
+| 2 | `Faz 5 — İterasyon 2: Profil sayfası` | `feat/faz5-profile` |
+| 3 | `Faz 5 — İterasyon 3: Hata sayfaları + Sentry` | `feat/faz5-errors-sentry` |
+| 4 | `Faz 5 — İterasyon 4: Production Dockerfile + kalite` | `chore/faz5-docker-production` |
+| 5 | `Faz 5 — İterasyon 5: Self-service deaktivasyon` | `feat/faz5-self-deactivate` |
+| 6 | `Faz 5 — İterasyon 6: Stabilizasyon` | `fix/faz5-stabilization` |
+
+**Yasak:** `main`'e doğrudan push; bir PR'da birden fazla iterasyon; Railway/Render/Fly platform config.
+
+## Bu fazın çalışma modeli
+
+- Tek sohbet fazı bitirmez — 6 ayrı chat ≈ 6 PR (iter 6 opsiyonel).
+- Her chat: `@54-phase-05-upload-production` + **「Faz 5 — İterasyon M」** + `48-git-phase-branch`.
+- Agent **yalnızca o iterasyonun Docs okuma sırasını** okur; tüm spec değil.
+- **Plan moduna geçme** — aşağıdaki iterasyon blueprint yeterli.
+- Upload: `13-backend-domain-modules.mdc` uploads pattern; SVG **yasak**.
+- Spec tek kaynak: `docs/`; API body / ekran alan tablosu bu dosyada **kopyalanmaz**.
+
+---
+
+### İterasyon 1 — Upload presign + resize flow (5.1)
+
+**Hedef:** `POST /uploads/presign` çalışır; `ImageUpload` bileşeni resize → presign → PUT → `publicUrl` döner; campaign banner, character portrait, homebrew görsel formlarına bağlanır.
+
+**Teslim çıktısı:**
+- `apps/api/src/uploads/` — module, controller, service, DTO
+- `packages/shared` — `UploadPurpose` enum, presign Zod şeması
+- `apps/web/src/lib/imageResize.ts`, `components/ImageUpload.tsx` (veya `ImageUploadDropzone`)
+- `apps/web/src/store/api/uploadsApi.ts`
+- `apps/api/src/uploads/uploads.auth.spec.ts`
+
+**Önkoşullar:**
+- [ ] Faz 4 merge — auth, campaign, character, homebrew CRUD çalışır
+- [ ] `docker compose up -d` — Postgres + Redis
+- [ ] `.env` — `S3_*` değişkenleri tanımlı (`docs/09` §4)
+- [ ] `48-git-phase-branch` — `feat/faz5-upload-presign` açılmış
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §5.1 — iterasyon kapsamı
+2. `docs/03_API_CONTRACTS.md` §13 — presign request/response, MIME kuralları
+3. `docs/07_SECURITY_IMPLEMENTATION.md` §11 — allowlist, 5 MB, SVG red
+4. `docs/05_FRONTEND_SPEC.md` §11 — resize limitleri, upload akışı
+5. `docs/04_BACKEND_SPEC.md` §11 — `UploadsService` S3 pattern
+
+**Uygulama planı:**
+1. `PresignRequestDto` — `contentType`, `purpose`, `fileName`, `fileSize`; class-validator (`docs/03` §13)
+2. `UploadsService.generatePresignedUrl` — MIME allowlist, `fileSize` ≤ 5MB, SVG reject; S3 presigned PUT (`docs/04` §11)
+3. `UploadsController` — `POST presign`; `JwtAuthGuard` + `EmailVerifiedGuard` (`docs/07` §11.3)
+4. `imageResize.ts` — Canvas resize; purpose boyutları: avatar 512, diğerleri 1600 (`docs/05` §11)
+5. `ImageUpload.tsx` — client MIME check → resize → `uploadsApi.presign` → `fetch PUT` → `publicUrl` callback
+6. Mevcut formlara prop: campaign `bannerUrl`, character `portraitUrl`, homebrew `imageUrl` — PATCH parent form'da
+7. `uploads.auth.spec.ts` — guest 401, svg 400, oversize 400, valid 200 (`docs/08` §5.5.3)
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Oluştur | `uploads/*`, `uploads.auth.spec.ts`, `imageResize.ts`, `ImageUpload.tsx`, `uploadsApi.ts`, shared presign schema |
+| Güncelle | Campaign/character/homebrew form bileşenleri (upload entegrasyonu), `app.module.ts`, `.env.example` (`S3_*`) |
+| Dokunma | `S-PROFILE` (§5.2), Sentry (§5.3), `users/me` (§5.2) |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| purpose enum | `docs/03` §13 | `avatar`, `portrait`, `banner`, `homebrew-image` |
+| MIME allowlist | `docs/07` §11.1 | png/jpeg/webp only; svg → 400 |
+| Presign auth | `docs/03` §13 | JwtAuthGuard; guest 401 |
+| Resize boyutları | `docs/05` §11 | avatar 512×512; portrait/banner/homebrew 1600w |
+
+**Kalite kapıları:**
+- [ ] `uploads.auth.spec.ts` — pozitif + SVG deny + guest deny
+- [ ] `pnpm lint && pnpm typecheck` yeşil
+- [ ] `password_hash` / token log yok (`03-security-baseline`)
+
+**Bu iterasyonda yok:**
+- Profil sayfası, `users/me` endpoint'leri
+- Sentry, Dockerfile, self-service deactivate
+- Sunucu taraflı magic-byte job (post-MVP)
+
+**Risk / dikkat:**
+- S3 endpoint MinIO/R2 uyumu — `S3_ENDPOINT` env (`docs/04` §11)
+- `ContentLength` presign — `fileSize` client bildirir; backend doğrular (`docs/07` §11.2)
+- Upload proxy üzerinden geçmez — doğrudan PUT
+
+**Stop:**
+- [ ] `docker compose up -d && pnpm --filter api test -- uploads.auth`
+- [ ] `pnpm lint && pnpm typecheck`
+- [ ] Manuel: bir formda görsel yükle → PATCH ile URL kaydedildi
+- [ ] PR/onay → İterasyon 2
+
+---
+
+### İterasyon 2 — Profil sayfası (5.2)
+
+**Hedef:** `GET/PATCH /users/me`, `PATCH /users/me/password` çalışır; `S-PROFILE` render edilir (DangerZone **hariç**); avatar upload iter 1 `ImageUpload` ile bağlanır.
+
+**Teslim çıktısı:**
+- `apps/api/src/users/` — controller `me` routes, service, DTO'lar
+- `apps/web/src/pages/profile/ProfilePage.tsx`
+- `apps/web/src/store/api/usersApi.ts`
+- Route `/profile` + sidebar link
+- `users.auth.spec.ts` — me matrisi (deactivate §5.5'te)
+
+**Önkoşullar:**
+- [ ] İterasyon 1 Stop — `ImageUpload` + presign çalışır
+- [ ] Branch: `feat/faz5-profile`
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §5.2 — DangerZone iter 5.5'te
+2. `docs/03_API_CONTRACTS.md` §4 — me, password, public user
+3. `docs/06_SCREEN_CATALOG.md` §11.1 — bileşen hiyerarşisi (DangerZone hariç)
+4. `docs/05_FRONTEND_SPEC.md` — `/profile` route, `usersApi` pattern
+5. `docs/08_TESTING_STRATEGY.md` §5.5 — me endpoint matrisi
+
+**Uygulama planı:**
+1. `UsersController` — `GET me`, `PATCH me`, `PATCH me/password` (`docs/03` §4)
+2. `UpdateProfileDto` — `username`, `avatarUrl`; `ChangePasswordDto` — `currentPassword`, `newPassword`
+3. Password: Argon2id verify current; hash new; refresh token revoke (`docs/03` §4 password side effect)
+4. `ProfilePage` — RHF profil + şifre formları; email readonly; `EmailVerificationStatus` (`docs/06` §11.1)
+5. Avatar: `ImageUpload` purpose `avatar` → PATCH `avatarUrl` (`docs/05` §11)
+6. RTK Query `usersApi`; başarılı PATCH → `auth.updateUser()` dispatch (`docs/06` §11.1 state)
+7. `users.auth.spec.ts` — GET/PATCH me, password wrong 401, guest 401 (`docs/08` §5.5)
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Oluştur | `users.controller.ts` (me routes), DTO'lar, `ProfilePage.tsx`, `usersApi.ts`, `users.auth.spec.ts` |
+| Güncelle | `users.service.ts`, `users.module.ts`, router, `AppLayout` dropdown Profile link, auth slice |
+| Dokunma | DangerZone / deactivate (§5.5), Sentry (§5.3), Dockerfile (§5.4) |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| GET me email | `docs/03` §4 | Yalnızca sahip; response'ta email OK |
+| PATCH username 409 | `docs/03` §4 | Unique constraint → 409 |
+| Password change | `docs/03` §4 | `PATCH /users/me/password`; wrong current → 401 |
+| DangerZone yok | `docs/06` §11.1 | İterasyon 5.5'te eklenir |
+
+**Kalite kapıları:**
+- [ ] `users.auth.spec.ts` — me + password deny/allow
+- [ ] Vitest: profil form validation (min password 8)
+- [ ] `pnpm lint && pnpm typecheck && pnpm test` yeşil
+- [ ] UI metinleri İngilizce; a11y label + focus-visible
+
+**Bu iterasyonda yok:**
+- `POST /users/me/deactivate`, DangerZone UI
+- 404/500 sayfaları, Sentry
+- Production Docker
+
+**Risk / dikkat:**
+- `password_hash` response/log yasak (`03-security-baseline`)
+- Şifre hatası genel mesaj — enumeration yok
+- Profil route `EmailVerifiedGuard` — doğrulanmamış kullanıcı erişimi spec'e uy (`docs/03` 🔑⚠️)
+
+**Stop:**
+- [ ] `pnpm --filter api test -- users.auth`
+- [ ] `pnpm --filter web test -- ProfilePage` (varsa)
+- [ ] `pnpm lint && pnpm typecheck`
+- [ ] PR/onay → İterasyon 3
+
+---
+
+### İterasyon 3 — Hata sayfaları + Sentry (5.3)
+
+**Hedef:** `S-404` catch-all ve `S-500` error boundary çalışır; `@sentry/nestjs` + `@sentry/react` entegre; `SENTRY_DSN` boşken Sentry kapalı.
+
+**Teslim çıktısı:**
+- `apps/web/src/pages/errors/NotFoundPage.tsx`, `ServerErrorPage.tsx`
+- `apps/web/src/components/ErrorBoundary.tsx` (veya root boundary)
+- `apps/api/src/main.ts` — Sentry init
+- `apps/web/src/main.tsx` — Sentry init + boundary wrap
+- `GlobalExceptionFilter` — 500 → Sentry capture
+- `.env.example` — `SENTRY_DSN=""` pointer
+
+**Önkoşullar:**
+- [ ] İterasyon 2 Stop
+- [ ] Branch: `feat/faz5-errors-sentry`
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §5.3
+2. `docs/06_SCREEN_CATALOG.md` §11.2–§11.3 — 404/500 UI metinleri
+3. `docs/04_BACKEND_SPEC.md` — GlobalExceptionFilter, Sentry notu
+4. `docs/09_DEV_WORKFLOW.md` §4 — `SENTRY_DSN` ortam tablosu
+5. `docs/07_SECURITY_IMPLEMENTATION.md` §12 — secret log yasak
+
+**Uygulama planı:**
+1. `NotFoundPage` — catch-all `*` route; "Go Home" koşullu redirect (`docs/06` §11.2)
+2. `ServerErrorPage` — minimal layout; Reload butonu (`docs/06` §11.3)
+3. React Router `errorElement` + class boundary → `ServerErrorPage` + Sentry `captureException`
+4. API: `@sentry/nestjs` — `Sentry.init` yalnızca `SENTRY_DSN` set ise (`docs/09` §4)
+5. `GlobalExceptionFilter` — unhandled/500 → `Sentry.captureException`; PII scrub (`docs/04`)
+6. FE: `@sentry/react` — aynı DSN guard; dev'de boş DSN → no-op
+7. Vitest: Error boundary fallback render smoke
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Oluştur | `NotFoundPage.tsx`, `ServerErrorPage.tsx`, `ErrorBoundary.tsx` |
+| Güncelle | `main.ts`, `web/main.tsx`, `GlobalExceptionFilter`, router config, `package.json` (sentry deps), `.env.example` |
+| Dokunma | Dockerfile (§5.4), deactivate (§5.5) |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| S-404 metinleri | `docs/06` §11.2 | İngilizce; auth-aware Go Home |
+| S-500 boundary | `docs/06` §11.3 | Ayrı route yok; boundary render |
+| SENTRY_DSN | `docs/09` §4 | Boş → init skip; staging/prod aktif |
+| 500 client stack yok | `docs/04` | Filter envelope; stack Sentry only |
+
+**Kalite kapıları:**
+- [ ] Dev'de `SENTRY_DSN` boş — uygulama boot OK
+- [ ] Vitest: NotFoundPage render; boundary catch test
+- [ ] `pnpm lint && pnpm typecheck && pnpm test` yeşil
+- [ ] Token/password Sentry breadcrumb'ta yok
+
+**Bu iterasyonda yok:**
+- Production Docker build
+- Self-service deactivate
+- E2E Sentry dashboard doğrulama (manuel insan)
+
+**Risk / dikkat:**
+- CSP/helmet Sentry script uyumu — `crossOriginEmbedderPolicy: false` mevcut pattern (`10-backend-general`)
+- Test ortamında Sentry disabled — mock veya boş DSN
+
+**Stop:**
+- [ ] `pnpm lint && pnpm typecheck && pnpm test`
+- [ ] Manuel: bilinmeyen route → 404; throw test route → 500 boundary
+- [ ] PR/onay → İterasyon 4
+
+---
+
+### İterasyon 4 — Production Dockerfile + kalite geçişi (5.4)
+
+**Hedef:** Multi-stage `Dockerfile` ile `docker build` başarılı; tam CI komutları yeşil; platform-specific deploy config **yazılmaz**.
+
+**Teslim çıktısı:**
+- Repo kökü `Dockerfile` (`docs/10` §7.6 şablonu)
+- `.dockerignore`
+- `ServeStaticModule` veya `main.ts` static path doğrulama
+- CI yeşil: lint, typecheck, test, build
+
+**Önkoşullar:**
+- [ ] İterasyon 1–3 Stop
+- [ ] Branch: `chore/faz5-docker-production`
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §5.4 + §7.6–§7.7
+2. `docs/09_DEV_WORKFLOW.md` §7 — CI pipeline; §13 — Docker build
+3. `docs/04_BACKEND_SPEC.md` — SPA static serve, Dockerfile referansı
+4. `04-quality-gates.mdc` — merge gate komutları
+
+**Uygulama planı:**
+1. `Dockerfile` — builder: pnpm install, web+api build; runtime: dist + public + prisma (`docs/10` §7.6)
+2. `.dockerignore` — `node_modules`, `.git`, `coverage`, `.env`
+3. `main.ts` — `apps/web/dist` serve path production'da doğru (`docs/04` SPA fallback)
+4. `package.json` start script — `node dist/main.js` + migrate deploy notu (`docs/09` §13)
+5. Tam kalite geçişi: `pnpm lint && pnpm typecheck && pnpm test && pnpm build` (`docs/10` §7.7)
+6. `docker build -t dnd-companion:latest .` smoke (`docs/09` §13)
+7. Seed doğrulama: `migrate deploy && db seed` (`docs/10` §7.7)
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Oluştur | `Dockerfile`, `.dockerignore` |
+| Güncelle | `main.ts` (static path), `.env.example`, CI workflow (yalnızca docker build job opsiyonel) |
+| Dokunma | Railway/Render/Fly config; `[INF-OPEN-1]` platform dosyaları |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| Multi-stage build | `docs/10` §7.6 | node:20-alpine |
+| FE dist serve | `docs/04` | Nest static + SPA fallback |
+| CI sırası | `04-quality-gates` | lint → typecheck → test → audit → build |
+| Platform yok | `docs/09` §13 | `[INF-OPEN-1]` açık |
+
+**Kalite kapıları:**
+- [ ] `docker build` başarılı
+- [ ] `pnpm lint && pnpm typecheck && pnpm test && pnpm build` yeşil
+- [ ] `pnpm audit --audit-level=critical` yeşil
+- [ ] policies/guards coverage %100 korunur
+
+**Bu iterasyonda yok:**
+- Cloud deploy, Terraform, platform env
+- Self-service deactivate (§5.5)
+- Lighthouse hard gate (bilgilendirme only)
+
+**Risk / dikkat:**
+- Monorepo `node_modules` copy — pnpm workspace path (`docs/09` §13)
+- Production'da `migrate dev` **yasak** — yalnızca `migrate deploy`
+- Agent production deploy çalıştırmaz (`docs/10` Bölüm 9)
+
+**Stop:**
+- [ ] `docker build -t dnd-companion:latest .`
+- [ ] `docker compose down -v && docker compose up -d && pnpm --filter api prisma migrate deploy && pnpm --filter api prisma db seed`
+- [ ] `pnpm lint && pnpm typecheck && pnpm test && pnpm build`
+- [ ] PR/onay → İterasyon 5
+
+---
+
+### İterasyon 5 — Self-service deaktivasyon + testler (5.5)
+
+**Hedef:** `POST /users/me/deactivate` çalışır; `S-PROFILE` DangerZone + onay modalı; deaktivasyon sonrası logout + login reddi; integration test matrisi yeşil.
+
+**Teslim çıktısı:**
+- `UsersController` — `POST me/deactivate`
+- `UsersService.deactivateSelf` — `is_active=false`, refresh revoke
+- `ProfilePage` — `DangerZone`, deactivate modal
+- `users.auth.spec.ts` — §5.5.2 matrisi
+
+**Önkoşullar:**
+- [ ] İterasyon 2 Stop — `ProfilePage` mevcut (DangerZone olmadan)
+- [ ] Faz 4 deaktive içerik filtreleri merge (`docs/10` §6.5)
+- [ ] Branch: `feat/faz5-self-deactivate`
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §5.5
+2. `docs/03_API_CONTRACTS.md` §4 — `POST /users/me/deactivate`
+3. `docs/06_SCREEN_CATALOG.md` §11.1 — DangerZone, modal metinleri
+4. `docs/07_SECURITY_IMPLEMENTATION.md` — deaktivasyon etkileri
+5. `docs/08_TESTING_STRATEGY.md` §5.5.2 — self-service test matrisi
+
+**Uygulama planı:**
+1. `deactivateSelf(userId)` — Prisma `is_active: false`; `refreshToken.deleteMany` (`docs/03` §4)
+2. `POST me/deactivate` — `204`; cookie clear client tarafı (`docs/06` §11.1)
+3. `DangerZone` + modal — İngilizce onay metni (`docs/06` §11.1)
+4. Başarı: logout dispatch, redirect `/login`
+5. `users.auth.spec.ts` — deactivate 204; sonrası login fail; guest 401 (`docs/08` §5.5.2)
+6. Deaktive içerik gizleme — mevcut Faz 4 filtreleri ile uyum testi (regression)
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Güncelle | `users.controller.ts`, `users.service.ts`, `ProfilePage.tsx`, `users.auth.spec.ts` |
+| Dokunma | Admin deactivate (Faz 4 mevcut); hard delete |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| Deactivate 204 | `docs/03` §4 | Self-service only own account |
+| Refresh iptali | `docs/03` §4 | Tüm refresh token'lar |
+| Modal metin | `docs/06` §11.1 | İngilizce; kırmızı Deactivate |
+| Login reddi | `docs/08` §5.5.2 | `is_active=false` post-deactivate |
+
+**Kalite kapıları:**
+- [ ] `users.auth.spec.ts` — §5.5.2 tüm satırlar
+- [ ] Testsiz yetki kuralı merge edilmez ([CODE-004])
+- [ ] `pnpm --filter api test -- users.auth` yeşil
+- [ ] `pnpm lint && pnpm typecheck`
+
+**Bu iterasyonda yok:**
+- Hard delete / GDPR erasure
+- Admin deactivate değişikliği (Faz 4)
+- Reaktivasyon self-service (yalnızca admin)
+
+**Risk / dikkat:**
+- Son admin self-deactivate — admin panelde reaktivasyon gerekir; `LAST_ADMIN` burada uygulanmaz (self-service farklı)
+- Deaktive sonrası access token memory — client logout zorunlu
+
+**Stop:**
+- [ ] `pnpm --filter api test -- users.auth`
+- [ ] Manuel: deactivate → login reddedilir; içerik gizli
+- [ ] PR/onay → İterasyon 6
+
+---
+
+### İterasyon 6 — Stabilizasyon + deployment hazırlık (5.6, opsiyonel)
+
+**Hedef:** Faz 5 çıktı kriterleri doğrulanır; gap fix; deployment hazırlık checklist tamamlanır; insan faz gate öncesi CI yeşil.
+
+**Teslim çıktısı:**
+- Stabilizasyon PR (≤6 dosya)
+- PR açıklamasında Faz 5 Done checklist + deployment hazırlık (`docs/09` §13)
+
+**Önkoşullar:**
+- [ ] İterasyon 1–5 Stop
+- [ ] Branch: `fix/faz5-stabilization`
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §5.6 + Faz 5 çıktı kriterleri
+2. `docs/09_DEV_WORKFLOW.md` §13 — deployment checklist
+3. `docs/08_TESTING_STRATEGY.md` — coverage gate kontrol
+4. `docs/00_PROJECT_OVERVIEW.md` Bölüm 10 — MVP başarı kriterleri
+
+**Uygulama planı:**
+1. `pnpm lint && pnpm typecheck && pnpm test && pnpm build` — kırık varsa düzelt (`@46-fix-failing-test`)
+2. Console warning temizliği (ana akışlar)
+3. Lighthouse bilgilendirme taraması — 70+/80+ hedef, hard fail değil (`docs/10` §7.7)
+4. `docs/09` §13 checklist PR'da işaretle
+5. Açık `TODO: mimari karar` taraması — `[INF-OPEN-1]` hariç
+6. Opsiyonel: `@phase-controller` gap audit tetikleme notu
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Güncelle | Yalnızca stabilizasyon gerektiren dosyalar (≤6) |
+| Dokunma | Yeni feature, platform deploy config |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| Faz 5 Done | `docs/10` Faz 5 çıktı | PR checklist |
+| İnsan gate | `docs/10` Bölüm 9 | Agent merge/deploy etmez |
+| INF-OPEN-1 | `docs/mimari-kararlar` §18 | Platform config yazma |
+
+**Kalite kapıları:**
+- [ ] `docker build` + full CI yeşil
+- [ ] Upload 4 purpose E2E manuel (insan)
+- [ ] Sentry test event (staging DSN — insan)
+- [ ] Faz 5 çıktı kriterleri tamam
+
+**Bu iterasyonda yok:**
+- Yeni endpoint/ekran
+- Production deploy komutu
+- `[INF-OPEN-1]` platform seçimi
+
+**Risk / dikkat:**
+- Scope creep reddet — yalnızca stabilizasyon
+- MVP dışı özellik ekleme yasak
+
+**Stop:**
+- [ ] `docker compose down -v && docker compose up -d && pnpm --filter api prisma migrate deploy && pnpm --filter api prisma db seed`
+- [ ] `docker build -t dnd-companion:latest .`
+- [ ] `pnpm lint && pnpm typecheck && pnpm test && pnpm build`
+- [ ] Faz 5 Done Definition checklist PR'da
+- [ ] **İnsan faz onayı bekle** — MVP deploy gate (`docs/10` Bölüm 9)
+
+---
+
+## Required Context
+
+- `docs/10_IMPLEMENTATION_ROADMAP.md` Bölüm 7 + §5.1–§5.6 + Bölüm 8 (Faz 5 Oturumları)
+- `docs/mimari-kararlar.md` — `[INF-OPEN-1]`, `[CODE-004]`, upload/Sentry kararları
+- İterasyon başına: yalnızca o iterasyonun **Docs okuma sırası**
+- How-to: `@40-add-new-endpoint`, `@41-add-new-screen`, `@43-add-authorization-policy`, `@46-fix-failing-test`, `@48-git-phase-branch`
+- Glob: `13-backend-domain-modules.mdc` (uploads), `30-infrastructure.mdc` (Docker)
+
+## Done Definition
+
+- [ ] Upload 4 purpose uçtan uca; SVG/5MB+ reddedilir (`docs/10` Faz 5)
+- [ ] `S-PROFILE`: username, avatar, şifre; DangerZone deactivate
+- [ ] `S-404`, `S-500`; Sentry BE+FE (`SENTRY_DSN` env)
+- [ ] `docker build` başarılı; CI yeşil
+- [ ] Self-service deactivate + test matrisi (`docs/08` §5.5.2)
+- [ ] Seed + migrate deploy hatasız
+- [ ] UI İngilizce; a11y temel
+- [ ] İnsan faz gate onayı (`docs/10` Bölüm 9); production deploy insan onayı
+
+## Explicit Don'ts
+
+- `[INF-OPEN-1]` deployment platformu varsayımı (Railway/Render/Fly/AWS terraform)
+- `[INF-OPEN-3]` backup/PITR implementasyonu
+- SVG upload; sunucu taraflı image pipeline; E2E Playwright
+- Hard delete / right to erasure; MFA; audit admin UI
+- Otomatik production deploy; `main`'e push onaysız
+- API body / ekran tablosunu bu `.mdc`'ye kopyalama
+
+---
+
+Phase done → `docs/10_IMPLEMENTATION_ROADMAP.md` Faz 5 insan gate; opsiyonel `@phase-controller` gap audit.

@@ -1,0 +1,494 @@
+---
+description: '[Faz 1] Temel Altyapı ve Kimlik Doğrulama — 6 iterasyon/chat (scaffold+CI → prisma+seed → auth BE → auth FE → rate limit+email → stabilizasyon). Mesajda "Faz 1 — İterasyon M" belirt.'
+---
+
+# Faz 1: Temel Altyapı ve Kimlik Doğrulama
+
+## Goal
+
+Monorepo iskeleti, Docker Compose (Postgres + Redis), CI pipeline, `users`/`refresh_tokens` şeması ve uçtan uca kimlik doğrulama (register → verify → login → refresh → logout → password reset). Faz 2+ için temel altyapı hazır olur. Detaylı kapsam: `docs/10_IMPLEMENTATION_ROADMAP.md` Bölüm 3.
+
+## Feature branch (zorunlu)
+
+`48-git-phase-branch.mdc` prosedürünü uygula. **İterasyon 1 başlamadan önce** `main`'den feature branch aç; her iterasyon merge sonrası yeni branch.
+
+| İterasyon | Chat opener | Branch örneği |
+| --- | --- | --- |
+| 1 | `Faz 1 — İterasyon 1: Monorepo scaffold + CI` | `chore/monorepo-scaffold-ci` |
+| 2 | `Faz 1 — İterasyon 2: Prisma + backend core + seed` | `feat/prisma-users-shared-seed` |
+| 3 | `Faz 1 — İterasyon 3: Auth backend` | `feat/auth-backend-endpoints` |
+| 4 | `Faz 1 — İterasyon 4: Auth frontend` | `feat/auth-frontend-pages` |
+| 5 | `Faz 1 — İterasyon 5: Rate limit + email` | `feat/auth-rate-limit-email` |
+| 6 | `Faz 1 — İterasyon 6: Stabilizasyon` | `fix/faz1-ci-stabilization` |
+
+**Yasak:** `main`'e doğrudan push; bir PR'da birden fazla iterasyon.
+
+## Bu fazın çalışma modeli
+
+- Tek sohbet fazı bitirmez — 6 ayrı chat ≈ 6 PR.
+- Her chat: `@50-phase-01-auth-infra` + **「Faz 1 — İterasyon M」** + `48-git-phase-branch`.
+- Agent **yalnızca o iterasyonun Docs okuma sırasını** okur; tüm spec değil.
+- **Plan moduna geçme** — aşağıdaki iterasyon blueprint yeterli.
+- Spec tek kaynak: `docs/`; API body / ekran alan tablosu bu dosyada **kopyalanmaz**.
+
+---
+
+### İterasyon 1 — Monorepo + Docker + CI (1.1)
+
+**Hedef:** pnpm monorepo, Docker Compose (Postgres 16 + Redis 7), Husky/lint-staged ve GitHub Actions CI yeşil; `apps/api` ve `apps/web` minimal shell derlenir.
+
+**Teslim çıktısı:**
+- Root `pnpm-workspace.yaml`, `package.json` script'leri (`dev:api`, `dev:web`, `lint`, `typecheck`, `test`, `build`)
+- `docker-compose.yml`, `.env.example`, `.gitignore`, ESLint + Prettier, Husky
+- `.github/workflows/ci.yml` (lint → type-check → test → audit → build)
+- Minimal `apps/api` (boş NestJS `main.ts`) ve `apps/web` (boş Vite `App.tsx`)
+- `.vscode/settings.json`, `.vscode/extensions.json`
+
+**Önkoşullar:**
+- [ ] Greenfield — `apps/` yok; bu iterasyon oluşturur
+- [ ] `48-git-phase-branch` — `chore/monorepo-scaffold-ci` branch açılmış
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §1.1 — iterasyon kapsamı
+2. `docs/09_DEV_WORKFLOW.md` §1–3, §7 — gereksinimler, Compose, CI job sırası
+3. `docs/04_BACKEND_SPEC.md` §1 — hedef klasör yapısı (tam modül §1.2'de)
+4. `docs/00_PROJECT_OVERVIEW.md` Bölüm 9 — stack pin doğrulama
+
+**Uygulama planı:**
+1. `pnpm-workspace.yaml` — `apps/api`, `apps/web`, `packages/shared` (`docs/10` §3.1)
+2. Root TS/ESLint/Prettier + Husky `lint-staged` (`docs/09` §1)
+3. `docker-compose.yml` — postgres:16, redis:7, volume + healthcheck (`docs/09` §3)
+4. `.env.example` — `DATABASE_URL`, `REDIS_URL`, placeholder JWT/SMTP (`docs/09` §4)
+5. `apps/api` — `nest new` veya manuel minimal NestJS; `apps/web` — Vite React TS; `packages/shared` boş export (`docs/04` §1)
+6. `.github/workflows/ci.yml` — `pnpm lint`, `typecheck`, `test`, `audit`, `build` (`docs/09` §7, `docs/10` §3.8)
+7. Root `package.json` script'leri ve workspace filter'ları
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Oluştur | `pnpm-workspace.yaml`, `package.json`, `tsconfig.json`, `.eslintrc.*`, `.prettierrc`, `docker-compose.yml`, `.env.example`, `.github/workflows/ci.yml`, `apps/api/**` (minimal), `apps/web/**` (minimal), `packages/shared/package.json`, `.husky/pre-commit` |
+| Güncelle | `.gitignore` |
+| Dokunma | Prisma schema, auth modülü, frontend auth sayfaları (§1.2–1.5) |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| pnpm workspace üç paket | `docs/10` §3.1 | `apps/api`, `apps/web`, `packages/shared` |
+| Compose Postgres 16 + Redis 7 | `docs/09` §3 | API/FE host'ta; container'da değil |
+| CI job sırası | `docs/09` §7 | lint → type-check → test → security → build |
+| Root script'ler | `docs/10` §3.1 | `pnpm dev:api`, `dev:web`, `lint`, `typecheck`, `test`, `build` |
+
+**Kalite kapıları:**
+- [ ] `docker compose up -d` — postgres + redis healthy
+- [ ] `pnpm lint` yeşil
+- [ ] `pnpm typecheck` yeşil
+- [ ] `pnpm test` yeşil (boş/minimal test suite kabul)
+- [ ] `pnpm --filter web build && pnpm --filter api build` yeşil
+
+**Bu iterasyonda yok:**
+- Prisma migration, NestJS global filter/pipe, auth endpoint'leri
+- Tailwind/shadcn, Redux, gerçek business logic
+
+**Risk / dikkat:**
+- Windows path + pnpm: `corepack enable` gerekebilir (`docs/09` §1)
+- CI'da Postgres/Redis service container veya migrate öncesi stub test — iter 2'de gerçek DB testleri gelir
+- API prefix `/api/v1` iter 2'de set edilir (`docs/03` §1); bu iterasyonda yalnızca derlenebilir shell
+
+**Stop:**
+- [ ] `docker compose up -d && docker compose ps`
+- [ ] `pnpm lint && pnpm typecheck && pnpm test`
+- [ ] `pnpm --filter web build && pnpm --filter api build`
+- [ ] PR aç → insan onayı → İterasyon 2
+
+---
+
+### İterasyon 2 — Backend core + Prisma + shared + seed (1.2)
+
+**Hedef:** NestJS backend core (`/api/v1`, PrismaModule, filter, pipe, health), `users`/`refresh_tokens` migration, `packages/shared` enums/Zod, idempotent admin seed çalışır.
+
+**Teslim çıktısı:**
+- `apps/api/src/main.ts` bootstrap (`docs/04` §3)
+- `common/prisma/`, `common/filters/`, `common/interceptors/` (request ID, logging)
+- `apps/api/prisma/schema.prisma` + ilk migration
+- `packages/shared/src/enums.ts`, `constants.ts`, `schemas/auth.ts`
+- `apps/api/prisma/seed.ts` — admin kullanıcı
+
+**Önkoşullar:**
+- [ ] İterasyon 1 Stop tamam (CI yeşil, Compose ayakta)
+- [ ] `docker compose up -d` — Postgres erişilebilir
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §1.2 — iterasyon kapsamı
+2. `docs/02_DATABASE_SCHEMA.md` — `users`, `refresh_tokens` tabloları, index, enum
+3. `docs/01_DOMAIN_MODEL.md` — User entity, Role enum
+4. `docs/04_BACKEND_SPEC.md` §2–3, §6–8 — PrismaModule, bootstrap, exception filter, validation, logging
+5. `docs/09_DEV_WORKFLOW.md` §2 — migrate + seed komutları
+
+**Uygulama planı:**
+1. `schema.prisma` — `User`, `RefreshToken`, `Role` enum (`docs/02`; snake_case DB → camelCase TS)
+2. `pnpm --filter api prisma migrate dev` — ilk migration (`@42-add-prisma-migration`)
+3. `PrismaModule` + `PrismaService` singleton (`docs/04` §2)
+4. `main.ts` — `setGlobalPrefix('api/v1')`, `ValidationPipe`, `GlobalExceptionFilter`, `cookieParser`, CORS (`docs/04` §3, `docs/03` §1)
+5. Request ID middleware + Pino logger redact (`docs/04` §8; password/token maskele)
+6. `GET /api/v1/health` — DB ping (`docs/10` §3.2)
+7. `packages/shared` — `Role`, `CharacterVisibility`, `HomebrewStatus`, `HomebrewType`, Action/Resource, auth Zod (`docs/10` §3.4)
+8. `seed.ts` — `SEED_ADMIN_EMAIL`/`SEED_ADMIN_PASSWORD` upsert (`docs/10` §3.7)
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Oluştur | `apps/api/prisma/schema.prisma`, `apps/api/prisma/migrations/*`, `apps/api/prisma/seed.ts`, `apps/api/src/common/prisma/*`, `apps/api/src/common/filters/*`, `apps/api/src/common/interceptors/*`, `apps/api/src/health/*`, `packages/shared/src/enums.ts`, `constants.ts`, `schemas/auth.ts` |
+| Güncelle | `apps/api/src/main.ts`, `apps/api/src/app.module.ts`, `packages/shared/package.json`, `.env.example` |
+| Dokunma | `auth/` modülü (§1.3), frontend (§1.4), rate limit (§1.5) |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| `users.email` unique | `docs/02` | Prisma `@unique` |
+| `refresh_tokens.token_hash` unique | `docs/02` | Hash saklanır, plain token değil |
+| API prefix `/api/v1` | `docs/03` §1 | Roadmap §3.2 `/api` eski — **docs/03 kazanır** |
+| Admin seed idempotent | `docs/10` §3.7 | upsert by email |
+| Shared auth Zod | `docs/10` §3.4 | FE + BE aynı şema kaynağı |
+
+**Kalite kapıları:**
+- [ ] `pnpm --filter api prisma migrate dev` başarılı
+- [ ] `pnpm --filter api prisma db seed` — admin oluşur, tekrar çalıştırma hatasız
+- [ ] `curl localhost:3000/api/v1/health` → 200
+- [ ] `pnpm lint && pnpm typecheck && pnpm test` yeşil
+
+**Bu iterasyonda yok:**
+- Auth endpoint'leri, JWT, EmailService
+- Frontend auth UI
+- Campaign/character tabloları (Faz 2)
+
+**Risk / dikkat:**
+- `password_hash` seed'de Argon2id ile (`docs/07` §2) — düz metin commit etme
+- Env validation startup'ta fail (`docs/04` §env) — eksik `DATABASE_URL` ile boot etmemeli
+
+**Stop:**
+- [ ] `docker compose up -d`
+- [ ] `pnpm --filter api prisma migrate dev && pnpm --filter api prisma db seed`
+- [ ] `pnpm --filter api dev` + health check
+- [ ] `pnpm lint && pnpm typecheck && pnpm test`
+- [ ] PR/onay → İterasyon 3
+
+---
+
+### İterasyon 3 — Auth backend + integration testler (1.3)
+
+**Hedef:** Sekiz auth endpoint çalışır; JWT + refresh rotation + reuse detection; auth integration testleri yeşil (email ve rate limit **stub**).
+
+**Teslim çıktısı:**
+- `apps/api/src/auth/` — controller, service, DTO, `TokenService`, `JwtStrategy`, guards, decorators
+- `apps/api/test/` veya `auth.controller.spec.ts` — supertest integration
+- `EmailService` **no-op veya mock** (gerçek SMTP §1.5)
+
+**Önkoşullar:**
+- [ ] İterasyon 2 Stop — migration + seed + health yeşil
+- [ ] `packages/shared` auth Zod export ediyor
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §1.3
+2. `docs/03_API_CONTRACTS.md` §3 — auth endpoint contract ve error code'lar
+3. `docs/07_SECURITY_IMPLEMENTATION.md` §2–4 — Argon2id, token, refresh rotation, email verification guard
+4. `docs/08_TESTING_STRATEGY.md` §4, §9 — integration iskelet, auth coverage ≥%95
+5. `docs/04_BACKEND_SPEC.md` §4 — JwtAuthGuard, `@Public()`, `EmailVerifiedGuard`
+
+**Uygulama planı:**
+1. Auth DTO'lar — `class-validator`; shared Zod ile uyum (`docs/03` §3; `@40-add-new-endpoint`)
+2. `TokenService` — access JWT 15dk, refresh random + hash DB (`docs/07` §3)
+3. `AuthService` — register (Argon2id), login (genel hata mesajı), refresh rotation, logout revoke (`docs/07` §2–3)
+4. verify-email, resend-verification, password-reset request/confirm (`docs/03` §3)
+5. `JwtAuthGuard` global + `@Public()`; `EmailVerifiedGuard` (`docs/04` §4, `docs/07` §4)
+6. `EmailService` inject — iter 3'te stub; token üretimi DB'de
+7. `test/setup.ts` — migrate deploy + truncate; `test/auth-helper.ts` (`docs/08` §4)
+8. Integration: register→login→refresh→logout; wrong password; inactive user; `password_hash` response'ta yok (`docs/08` §9)
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Oluştur | `apps/api/src/auth/**`, `apps/api/src/common/guards/jwt-auth.guard.ts`, `email-verified.guard.ts`, `apps/api/src/common/decorators/public.decorator.ts`, `apps/api/test/setup.ts`, `test/factories/user.factory.ts`, `auth.controller.spec.ts` |
+| Güncelle | `apps/api/src/app.module.ts`, `jest.config.ts` (coverageThreshold auth ≥%95) |
+| Dokunma | Redis rate limit (§1.5), gerçek SMTP (§1.5), frontend (§1.4) |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| Login hata mesajı | `docs/03` §2, §3 | `"Invalid email or password"` — enumeration yok |
+| Refresh cookie | `docs/03` §3, `docs/07` §3 | httpOnly, Secure, SameSite=Strict |
+| Reuse detection | `docs/07` §3 | Revoked token → tüm refresh iptal |
+| `EMAIL_NOT_VERIFIED` | `docs/07` §4 | 403 + guard |
+| `password_hash` yasak response | `docs/07` §PII | integration assert |
+
+**Kalite kapıları:**
+- [ ] Integration: register → login → refresh → logout
+- [ ] Deny: wrong password, deactivated user (`is_active=false`)
+- [ ] Deny: reuse revoked refresh token
+- [ ] `pnpm --filter api test -- --ci --coverage` — `auth/` ≥%95
+- [ ] `pnpm lint && pnpm typecheck` yeşil
+
+**Bu iterasyonda yok:**
+- Redis `@Throttle` (§1.5)
+- Gerçek SMTP gönderimi (§1.5)
+- Auth frontend sayfaları
+- Campaign/character endpoint'leri
+
+**Risk / dikkat:**
+- Access token localStorage'a **yazma** (`docs/07` §3)
+- Refresh endpoint cookie'den okur — supertest'te `agent` + cookie jar
+- `resend-verification` auth gerektirir (`docs/03` §3)
+
+**Stop:**
+- [ ] `docker compose up -d && pnpm --filter api prisma migrate deploy`
+- [ ] `pnpm --filter api test -- --ci --coverage`
+- [ ] `pnpm lint && pnpm typecheck && pnpm test`
+- [ ] PR/onay → İterasyon 4
+
+---
+
+### İterasyon 4 — Auth frontend (1.4)
+
+**Hedef:** Auth ekranları (`S-LOGIN` … `S-SESSION-EXPIRED`) çalışır; Redux auth slice + RTK Query reauth; route guard'lar aktif.
+
+**Teslim çıktısı:**
+- `apps/web/src/pages/auth/*`, `features/auth/ProtectedRoute.tsx`, `PublicOnlyRoute.tsx`
+- `store/authSlice.ts`, `store/api/baseApi.ts`, `authApi.ts`
+- Tailwind + shadcn/ui (Button, Input, Form, Card, Toast)
+- `/` dashboard placeholder (protected)
+
+**Önkoşullar:**
+- [ ] İterasyon 3 Stop — auth API ayakta, integration testler yeşil
+- [ ] `pnpm --filter api dev` + `pnpm --filter web dev` paralel çalışır
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §1.4
+2. `docs/05_FRONTEND_SPEC.md` §3–5 — route, auth slice, RTK Query reauth
+3. `docs/06_SCREEN_CATALOG.md` Grup 1 — `S-LOGIN`, `S-REGISTER`, `S-VERIFY-EMAIL`, `S-PW-RESET-REQ`, `S-PW-RESET-CONF`, `S-SESSION-EXPIRED`
+4. `docs/03_API_CONTRACTS.md` §3 — FE'nin çağıracağı endpoint'ler (body spec'te)
+5. `docs/07_SECURITY_IMPLEMENTATION.md` §3 — access token memory only
+
+**Uygulama planı:**
+1. Tailwind + shadcn/ui kurulum (`docs/10` §3.6; `@41-add-new-screen`)
+2. `authSlice` — `accessToken`, `user`; `setCredentials`, `clearCredentials` (`docs/05` §4)
+3. `baseApi` + `baseQueryWithReauth` — 401 → `/auth/refresh` → retry (`docs/05` §4)
+4. Auth layout — ortalanmış kart (`docs/06` Grup 1 ortak layout)
+5. Sayfalar: login, register, verify-email, forgot-password, reset-password (`docs/06` §4.1–4.5)
+6. `ProtectedRoute` / `PublicOnlyRoute` (`docs/05` §3)
+7. Session expired modal (`docs/06` `S-SESSION-EXPIRED`)
+8. Vitest: form validation error state, guard redirect (`docs/08` §6)
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Oluştur | `apps/web/src/pages/auth/*`, `apps/web/src/features/auth/*`, `apps/web/src/layouts/AuthLayout.tsx`, `apps/web/src/store/authSlice.ts`, `apps/web/src/store/api/baseApi.ts`, `authApi.ts`, `components/ui/*` (shadcn), `*.test.tsx` (guard/form) |
+| Güncelle | `apps/web/src/App.tsx`, `apps/web/src/main.tsx`, `vite.config.ts`, `tailwind.config.ts` |
+| Dokunma | Campaign/character sayfaları, WebSocket, profil (Faz 2+) |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| `S-LOGIN` | `docs/06` §4.1 | RHF + shared Zod; 401 → ErrorAlert |
+| Access token storage | `docs/07` §3 | Redux memory only — localStorage yasak |
+| Refresh cookie | `docs/03` §3 | `credentials: 'include'` RTK Query |
+| `S-VERIFY-EMAIL` | `docs/06` §4.3 | Mount'ta POST verify-email |
+| Protected `/` | `docs/05` §3 | Unauthenticated → `/login` |
+
+**Kalite kapıları:**
+- [ ] Vitest: login form validation errors (English messages)
+- [ ] Vitest: `ProtectedRoute` redirects unauthenticated
+- [ ] `pnpm --filter web test -- --ci` yeşil
+- [ ] `pnpm lint && pnpm typecheck && pnpm test` yeşil
+- [ ] `pnpm --filter web build` yeşil
+
+**Bu iterasyonda yok:**
+- Campaign list (`S-CAMPAIGN-LIST`) gerçek API — placeholder dashboard yeterli
+- Rate limit UI (429 toast §1.5'te polish)
+- Sentry, 404/500 sayfaları (Faz 5)
+
+**Risk / dikkat:**
+- CORS `credentials: true` + `FRONTEND_URL` backend'de (`docs/04` §3)
+- UI metinleri **yalnızca İngilizce** (`docs/00` Bölüm 9)
+- a11y: form label, `aria-invalid`, focus-visible (`25-frontend-a11y`)
+
+**Stop:**
+- [ ] `pnpm --filter api dev` + `pnpm --filter web dev` — manuel login akışı smoke
+- [ ] `pnpm --filter web test -- --ci`
+- [ ] `pnpm lint && pnpm typecheck && pnpm test`
+- [ ] PR/onay → İterasyon 5
+
+---
+
+### İterasyon 5 — Rate limit + EmailService + test tamamlama (1.5)
+
+**Hedef:** Redis auth rate limit (5/15dk/IP) aktif; SMTP ile doğrulama ve şifre sıfırlama mailleri gider; auth integration test matrisi tamamlanır.
+
+**Teslim çıktısı:**
+- `apps/api/src/common/guards/` veya Throttle config — Redis store
+- `apps/api/src/email/email.service.ts` — SMTP (Gmail uyumlu)
+- Auth integration testleri: 429, rotation, enumeration, email token akışı
+
+**Önkoşullar:**
+- [ ] İterasyon 4 Stop — FE auth akışı smoke OK
+- [ ] Redis Compose'ta ayakta (`docker compose up -d`)
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §1.5
+2. `docs/07_SECURITY_IMPLEMENTATION.md` §10 — rate limit bucket ve decorator
+3. `docs/04_BACKEND_SPEC.md` §10 — EmailService SMTP yapılandırması
+4. `docs/08_TESTING_STRATEGY.md` §4, §5 — auth deny senaryoları
+5. `docs/03_API_CONTRACTS.md` §3 — 429 response beklentisi
+
+**Uygulama planı:**
+1. `@nestjs/throttler` + Redis storage — auth route'ları 5/900s (`docs/07` §10)
+2. `EmailService` — verification + password-reset template; env: `SMTP_*` (`docs/04` §10)
+3. AuthService'te stub kaldır — gerçek email gönderimi (dev'de Mailhog opsiyonel — env ile)
+4. Integration: 6. istek → 429 + `Retry-After` (`docs/03` §2)
+5. Integration: password-reset request — email yoksa da 200 (enumeration) (`docs/03` §3)
+6. Integration: verify-email token tek kullanım
+7. `.env.example` — `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `REDIS_URL`
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Oluştur | `apps/api/src/email/email.module.ts`, `email.service.ts`, throttle config |
+| Güncelle | `apps/api/src/auth/auth.controller.ts`, `auth.service.ts`, `auth.controller.spec.ts`, `.env.example`, `apps/web` 429 toast (login/register) |
+| Dokunma | Campaign modülü, WebSocket, admin panel |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| Auth rate 5/15dk/IP | `docs/07` §10 | login, register, password-reset/request |
+| 429 mesajı | `docs/03` §2 | `"Too many requests. Please try again later."` |
+| SMTP verification mail | `docs/04` §10 | Link `FRONTEND_URL/verify-email/:token` |
+| Password reset enumeration | `docs/03` §3 | Her zaman 200 request endpoint |
+| Refresh rotation test | `docs/08` §9 | Eski cookie ile refresh → fail |
+
+**Kalite kapıları:**
+- [ ] Integration: rate limit 429 on 6th request
+- [ ] Integration: full register → verify → login
+- [ ] Integration: password-reset request + confirm
+- [ ] `auth/` coverage ≥%95
+- [ ] `pnpm lint && pnpm typecheck && pnpm test` yeşil
+
+**Bu iterasyonda yok:**
+- Global API rate limit (reverse proxy — post-MVP deploy)
+- MFA, HaveIBeenPwned
+- Production SMTP secret management (`[INF-OPEN-1]`)
+
+**Risk / dikkat:**
+- Test ortamında EmailService mock veya ethereal — gerçek Gmail limitleri (`docs/10` R7)
+- Redis yoksa CI'da service container gerekir (`docs/09` §7)
+
+**Stop:**
+- [ ] `docker compose up -d`
+- [ ] `pnpm --filter api test -- --ci --coverage`
+- [ ] `pnpm lint && pnpm typecheck && pnpm test`
+- [ ] `pnpm --filter web build && pnpm --filter api build`
+- [ ] PR/onay → İterasyon 6 veya Faz 1 insan gate
+
+---
+
+### İterasyon 6 — Stabilizasyon (1.6, opsiyonel)
+
+**Hedef:** Faz 1 çıktı kriterleri checklist'i yeşil; CI stabil; açık bug'lar kapatılmış.
+
+**Teslim çıktısı:**
+- CI fix PR'ları (gerekirse)
+- Eksik test/coverage gap kapatma
+- `docs/10` Faz 1 çıktı kriterleri doğrulama notu (PR açıklamasında)
+
+**Önkoşullar:**
+- [ ] İterasyon 5 Stop tamam veya bilinen tek blocker listesi var
+
+**Docs okuma sırası:**
+1. `docs/10_IMPLEMENTATION_ROADMAP.md` §1.6 + Faz 1 Çıktı Kriteri
+2. `docs/10_IMPLEMENTATION_ROADMAP.md` Bölüm 9 — insan gate kontrolleri
+3. İlgili fail eden spec bölümü (sadece blocker için)
+
+**Uygulama planı:**
+1. CI log triage — `@46-fix-failing-test` prosedürü
+2. Manuel test bulguları → minimal fix (auth akışı uçtan uca)
+3. Coverage gap — yalnızca `auth/`, `guards/` hard gate
+4. PR checklist: seed idempotent, `.env.example` güncel, Türkçe UI string yok
+5. İnsan gate bekle — Faz 2'ye geçiş onayı (`docs/10` Bölüm 9)
+
+**Dosya kapsamı:**
+
+| İşlem | Path |
+| ----- | ---- |
+| Güncelle | Blocker dosyaları only (≤8 dosya) |
+| Dokunma | Yeni feature, Faz 2 kodu |
+
+**Spec → kod eşlemesi:**
+
+| Gereksinim | Docs referansı | Uygulama notu |
+| ---------- | -------------- | ------------- |
+| Faz 1 çıktı kriterleri | `docs/10` Faz 1 checklist | PR body'de madde madde |
+| İnsan gate | `docs/10` Bölüm 9 | Agent merge/deploy yapmaz |
+| Seed reset | `docs/09` §3 | `docker compose down -v` → migrate → seed |
+
+**Kalite kapıları:**
+- [ ] `pnpm lint && pnpm typecheck && pnpm test` yeşil
+- [ ] `pnpm --filter web build && pnpm --filter api build` yeşil
+- [ ] GitHub Actions tüm job'lar yeşil
+- [ ] Açık `// TODO: mimari karar` yok
+
+**Bu iterasyonda yok:**
+- Yeni endpoint/ekran
+- Faz 2 campaign/character işi
+- Production deploy
+
+**Risk / dikkat:**
+- Scope creep — yalnızca stabilizasyon; yeni özellik reddet
+
+**Stop:**
+- [ ] `docker compose down -v && docker compose up -d && pnpm --filter api prisma migrate deploy && pnpm --filter api prisma db seed`
+- [ ] Full gate: `pnpm lint && pnpm typecheck && pnpm test && build`
+- [ ] Faz 1 Done Definition checklist PR'da
+- [ ] **İnsan faz onayı bekle** — Faz 2 planlaması onay sonrası
+
+---
+
+## Required Context
+
+- `docs/10_IMPLEMENTATION_ROADMAP.md` Bölüm 3 + §1.1–§1.6 + Bölüm 8 (oturum tablosu)
+- `docs/mimari-kararlar.md` — stack pin, `[CODE-004]` agent yasakları
+- İterasyon başına: yalnızca o iterasyonun **Docs okuma sırası** (yukarıda)
+- How-to: `@40-add-new-endpoint`, `@41-add-new-screen`, `@42-add-prisma-migration`, `@46-fix-failing-test`, `@48-git-phase-branch`
+
+## Done Definition
+
+- [ ] Register → verify email → login → refresh → logout → password reset uçtan uca (manuel + integration)
+- [ ] `EmailVerifiedGuard` — doğrulanmamış kullanıcı kısıtlı (`docs/07` §4)
+- [ ] Auth integration testleri; `auth/` coverage ≥%95 (`docs/08` §9)
+- [ ] Rate limit login/register/password-reset (`docs/07` §10)
+- [ ] Refresh rotation + reuse detection (`docs/07` §3)
+- [ ] `password_hash` response/log yok; login enumeration yok
+- [ ] CI pipeline yeşil (`docs/09` §7)
+- [ ] `docker compose up -d` + migrate + seed ≤5 dk (`docs/09` §2)
+- [ ] İnsan faz gate onayı (`docs/10` Bölüm 9)
+
+## Explicit Don'ts
+
+- Campaign, character, homebrew, WebSocket, admin panel, upload (Faz 2–5)
+- MFA, E2E Playwright, Sentry (Faz 5), audit log UI
+- Access token localStorage/sessionStorage
+- Guard'sız yazma endpoint'i
+- Raw SQL — yalnızca Prisma Client
+- `main`'e push; production deploy; faz geçişi onaysız
+- `[INF-OPEN-1]` deployment varsayımı
+- API body / ekran tablosunu bu `.mdc`'ye kopyalama
+
+---
+
+Phase done → `docs/10_IMPLEMENTATION_ROADMAP.md` Faz 1 insan gate; opsiyonel `@phase-controller` gap audit.

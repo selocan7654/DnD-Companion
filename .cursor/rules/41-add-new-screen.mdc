@@ -1,0 +1,254 @@
+---
+description: Step-by-step procedure to add a React screen (route, page, RTK Query, form, a11y, screen catalog). Use when implementing S-* screens, new routes in apps/web, or frontend features from 06_SCREEN_CATALOG.
+---
+
+# Add New Screen — Procedure
+
+Every screen has an ID (`S-*`) in `docs/06_SCREEN_CATALOG.md`. UI text **English only**. Security boundary is backend — FE guards are UX (`docs/05` Bölüm 12).
+
+Glob context: `21-frontend-routes.mdc`, `20-frontend-general.mdc`, `22-frontend-forms.mdc`, `23-frontend-rtk-query.mdc`.
+
+## Step 0: Preconditions
+
+- [ ] Screen spec exists in `docs/06_SCREEN_CATALOG.md` (route, layout, auth, component tree, API table, states).
+- [ ] Route listed in `docs/05_FRONTEND_SPEC.md` Bölüm 2.
+- [ ] Backend endpoints exist or ship in same PR (`@40-add-new-endpoint`).
+- [ ] Shared Zod schemas in `packages/shared` for forms.
+
+Load: `docs/06_SCREEN_CATALOG.md` (target §), `docs/05_FRONTEND_SPEC.md` Bölüm 2–4, 7, 12–13.
+
+## Step 1: Screen ID and File Placement
+
+| Screen type | Page file | Feature components |
+| --- | --- | --- |
+| Campaign | `apps/web/src/pages/campaigns/` | `apps/web/src/features/campaigns/` |
+| Character | `pages/characters/` | `features/characters/` |
+| Homebrew | `pages/homebrew/` | `features/homebrew/` |
+| Auth | `pages/auth/` | `features/auth/` |
+| Admin | `pages/admin/` | `features/admin/` |
+
+Naming: `CampaignListPage.tsx`, `DmScreenPage.tsx` — PascalCase + `Page` suffix.
+
+## Step 2: Register Route
+
+In router config (`apps/web/src/router/` or `App.tsx` per project layout):
+
+```typescript
+{
+  path: '/campaigns/:id/dm-screen',
+  element: (
+    <AuthGuard>
+      <DmScreenPage />
+    </AuthGuard>
+  ),
+}
+```
+
+Route table reference → `docs/05_FRONTEND_SPEC.md` Bölüm 2.
+
+| Auth need | Wrapper |
+| --- | --- |
+| Logged-in | `<AuthGuard>` |
+| Admin | `<AuthGuard><AdminGuard>` |
+| Public | none or redirect if already logged in |
+| Mixed visibility | page-level fetch + 404 UI |
+
+Set dynamic `<title>`: `"DM Screen — DnD Companion"` (`docs/05` Bölüm 13).
+
+## Step 3: Layout
+
+| Layout | When |
+| --- | --- |
+| `AuthLayout` | login, register, reset password |
+| `AppLayout` | authenticated app pages |
+| `PublicLayout` | reference, published homebrew gallery |
+| `FullWidthLayout` | DM Screen (sidebar hidden) |
+
+Match `docs/06_SCREEN_CATALOG.md` Bölüm 2 and per-screen **Layout** field.
+
+## Step 4: RTK Query Endpoints
+
+In `features/<domain>/<domain>Api.ts`:
+
+```typescript
+getCampaign: builder.query<Campaign, string>({
+  query: (id) => `/campaigns/${id}`,
+  providesTags: (_r, _e, id) => [{ type: 'Campaign', id }],
+}),
+updateCampaign: builder.mutation<Campaign, { id: string; body: UpdateCampaignDto }>({
+  query: ({ id, body }) => ({ url: `/campaigns/${id}`, method: 'PATCH', body }),
+  invalidatesTags: (_r, _e, { id }) => [{ type: 'Campaign', id }],
+}),
+```
+
+- Base URL `/api/v1` in API slice config.
+- Bearer token from auth slice (memory — never localStorage).
+- Tag strategy → `docs/05` Bölüm 4–5.
+
+## Step 5: Page Component Structure
+
+```typescript
+export function CampaignDetailPage() {
+  const { id } = useParams();
+  const { data, isLoading, isError } = useGetCampaignQuery(id!);
+
+  if (isLoading) return <PageSkeleton />;
+  if (isError || !data) return <NotFoundPage />;
+
+  return (
+    <AppLayout>
+      <CampaignHeader campaign={data.data} />
+      <CampaignMemberList campaignId={id!} />
+    </AppLayout>
+  );
+}
+```
+
+Implement all UX states from catalog:
+
+| State | Pattern |
+| --- | --- |
+| Loading | skeleton or spinner |
+| Empty | illustrated empty state + CTA |
+| Error | Alert with English message from API `message` |
+| Success | main content |
+
+## Step 6: Forms (if applicable)
+
+React Hook Form + Zod resolver + shared schema:
+
+```typescript
+const form = useForm<CreateCampaignInput>({
+  resolver: zodResolver(createCampaignSchema),
+});
+```
+
+- Validation messages English (`docs/05` Bölüm 7).
+- Submit: disable button + spinner.
+- Server `400` → map `details[]` to field errors.
+- Email-not-verified `403` → toast or banner, not silent fail.
+
+## Step 7: Conditional UI (DM vs Player)
+
+Hide buttons client-side for UX; **never** skip backend checks.
+
+```typescript
+const isDm = campaign.ownerId === user?.id;
+{isDm && <InviteLinkManager campaignId={id} />}
+```
+
+DM-only screens (e.g. `S-DM-SCREEN`) → redirect or 404 if not owner (`docs/06` Grup 3).
+
+## Step 8: Accessibility
+
+Per `docs/05_FRONTEND_SPEC.md` Bölüm 13 and `25-frontend-a11y.mdc`:
+
+```
+[ ] Interactive elements keyboard reachable; focus-visible ring
+[ ] Icon buttons have aria-label
+[ ] Form fields: label + aria-invalid + aria-describedby on error
+[ ] Modals: role="dialog", aria-modal, focus trap
+[ ] Color not sole indicator — text/icon accompanies status
+```
+
+## Step 9: Responsive Behavior
+
+Follow catalog **Responsive** subsection — typically Tailwind breakpoints (`sm`, `md`, `lg`). DM Screen: players panel stacks on mobile.
+
+## Step 10: Component Tests
+
+Vitest + Testing Library (`docs/08` Bölüm 6):
+
+- Form validation error states (English assert).
+- Auth guard redirect (mock store).
+- Conditional render (DM-only button hidden for player).
+
+MSW for RTK Query mocks. CSS imports off in vitest config.
+
+## Step 11: Update Docs (if drift)
+
+If route or behavior changed during implementation:
+
+- [ ] `docs/06_SCREEN_CATALOG.md` — component tree, API table
+- [ ] `docs/05_FRONTEND_SPEC.md` Bölüm 2 — route row
+
+## Step 12: Pre-PR Verification
+
+```bash
+pnpm lint
+pnpm typecheck
+pnpm --filter web test -- --ci
+pnpm --filter web build
+```
+
+Checklist:
+
+```
+[ ] All UI strings English
+[ ] No access token in localStorage/sessionStorage
+[ ] Loading/empty/error states implemented
+[ ] Screen ID referenced in PR description (e.g. S-DM-SCREEN)
+[ ] a11y basics on new interactive elements
+```
+
+## Anti-patterns
+
+- ❌ Turkish UI labels or toast messages
+- ❌ TanStack Query alongside RTK Query
+- ❌ Fetch in `useEffect` bypassing RTK Query for CRUD
+- ❌ Security-only frontend guard without backend policy
+- ❌ Copying full screen catalog tables into components
+
+## Screen Catalog Cross-Reference
+
+When adding a screen, register in catalog header format:
+
+```
+### X.Y S-MY-SCREEN — Title ⭐ Kritik|Normal
+**Route:** `/path`
+**Layout:** App Layout | Auth Layout | ...
+**Auth:** 🔓 | 🔑 | 👑
+```
+
+Grup index → `docs/06_SCREEN_CATALOG.md` Bölüm 1 (ekran haritası).
+
+## Image Upload Screens
+
+If screen includes avatar/homebrew image → `docs/05_FRONTEND_SPEC.md` Bölüm 11 (presigned URL, client resize, no SVG).
+
+## Error and Not Found
+
+| HTTP | UI behavior |
+| --- | --- |
+| 404 | `NotFoundPage` or inline "not found" |
+| 403 | Toast: API `message`; redirect if DM-only |
+| 401 | Auth slice clear → `/login` |
+
+Global error boundary for 500 → Faz 5 (`docs/06` Grup 8).
+
+## Performance Notes
+
+- RTK Query `skip: !id` when param undefined.
+- List pages: virtualize only if catalog requires (post-MVP default: pagination).
+- Lazy-load heavy builder steps if character builder (`docs/05` Bölüm 14).
+
+## Troubleshooting
+
+| Problem | Fix |
+| --- | --- |
+| Infinite redirect login | `isLoading` guard before Navigate |
+| Stale list after mutation | `invalidatesTags` / `providesTags` |
+| CORS on API | Bearer via RTK `prepareHeaders`, not cookie for access |
+| Turkish validation | Zod messages in shared schema — English only |
+
+## Related How-tos
+
+| Need | How-to |
+| --- | --- |
+| New API | `@40-add-new-endpoint` |
+| Live fields / WS | `@47-websocket-live-fields` |
+| Faz branch | `@48-git-phase-branch` |
+
+---
+
+Detay: `docs/06_SCREEN_CATALOG.md`; `docs/05_FRONTEND_SPEC.md` Bölüm 2–4, 7, 12–13; `docs/08_TESTING_STRATEGY.md` Bölüm 6

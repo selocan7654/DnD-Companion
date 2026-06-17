@@ -1,0 +1,300 @@
+---
+description: React Router — route tanımı, layout nesting, guard (UX), lazy load, dinamik title. routes/, layouts/, pages/ düzenlemelerinde.
+globs:
+  - "apps/web/src/routes/**"
+  - "apps/web/src/App.tsx"
+  - "apps/web/src/layouts/**"
+  - "apps/web/src/pages/**"
+---
+
+# DnD Companion — Frontend Routes
+
+Tüm route tanımları `routes/index.tsx` (veya `App.tsx` router config) merkezinde. React Router v6 data/nested layout pattern. Path'ler kebab-case İngilizce.
+
+Genel mimari → `20-frontend-general.mdc`; form sayfaları → `22-frontend-forms.mdc`.
+
+## Route Organizasyonu
+
+```
+routes/index.tsx     # createBrowserRouter veya <Routes> ağacı
+layouts/             # PublicLayout, AppLayout, AdminLayout
+pages/               # Route-level default export
+features/auth/       # AuthGuard, AdminGuard
+```
+
+Sayfa bileşeni `pages/<domain>/<Name>Page.tsx`; route path ile dosya adı tutarlı (`CampaignDetailPage` → `/campaigns/:id`).
+
+## Layout Nesting
+
+```typescript
+// ✓ Doğru — nested layout + guard
+{
+  element: <AuthGuard><AppLayout /></AuthGuard>,
+  children: [
+    { path: '/campaigns', element: <CampaignListPage /> },
+    { path: '/campaigns/:id/dm-screen', element: <DmScreenPage /> },
+  ],
+},
+{
+  element: <PublicLayout />,
+  children: [
+    { path: '/login', element: <LoginPage /> },
+    { path: '/homebrew', element: <HomebrewGalleryPage /> },
+  ],
+},
+{
+  element: <AuthGuard><AdminGuard><AdminLayout /></AdminGuard></AuthGuard>,
+  children: [
+    { path: '/admin/users', element: <AdminUsersPage /> },
+  ],
+}
+
+// ✗ Yanlış — her sayfada layout tekrarı
+function CampaignListPage() {
+  return <AppLayout><Content /></AppLayout>;
+}
+```
+
+## Auth Seviyeleri (UX)
+
+| Sembol | Anlam | Guard |
+| --- | --- | --- |
+| Public | Misafir erişir | Yok |
+| App | Giriş zorunlu | `AuthGuard` |
+| Mixed | Kaynağa göre (public character) | Sayfa içi API + koşullu layout |
+| Admin | `role === ADMIN` | `AuthGuard` + `AdminGuard` |
+
+**Kritik:** Guard'lar yalnızca UX — backend her istekte JWT + policy doğrular. Yetkisiz kullanıcı guard'ı bypass etse bile API `403`/`404` döner.
+
+```typescript
+// ✓ Doğru — AuthGuard UX
+function AuthGuard({ children }: { children: React.ReactNode }) {
+  const { user, isLoading } = useAuth();
+  if (isLoading) return <LoadingSpinner />;
+  if (!user) return <Navigate to="/login" replace state={{ from: location }} />;
+  return <>{children}</>;
+}
+
+// ✗ Yanlış — guard'ta yetki kararı (DM mi?)
+if (campaign.ownerId !== user.id) throw new Error('Forbidden');
+```
+
+## Email Doğrulama UX
+
+`EmailVerificationBanner` layout'ta — route **bloklamaz**. Yazma sayfalarında butonlar `disabled` + tooltip: `"Please verify your email to perform this action"`. API `403 EMAIL_NOT_VERIFIED` yedek.
+
+## Route Path Konvansiyonu
+
+| Pattern | Örnek |
+| --- | --- |
+| Liste | `/campaigns`, `/characters` |
+| Oluştur | `/campaigns/new`, `/characters/new` |
+| Detay | `/campaigns/:id`, `/characters/:id` |
+| Düzenle | `/campaigns/:id/edit` |
+| Alt özellik | `/campaigns/:id/dm-screen` |
+| Public galeri | `/homebrew`, `/reference/:type` |
+| Token query | `/verify-email?token=`, `/reset-password/confirm?token=` |
+| Catch-all | `*` → `NotFoundPage` |
+
+Tam path listesi → `docs/05_FRONTEND_SPEC.md` Bölüm 2. Ekran ID eşlemesi → `docs/06_SCREEN_CATALOG.md` Bölüm 1 (`S-*`).
+
+Route path ile katalog ID çelişirse **docs/05 routing + 06 ID** birlikte okunur; implementasyonda 05 path öncelikli, ID sabit kalır.
+
+## createBrowserRouter İskeleti
+
+```typescript
+// ✓ Doğru — merkezi router config
+export const router = createBrowserRouter([
+  {
+    element: <PublicLayout />,
+    children: [
+      { path: '/login', element: <LoginPage /> },
+      { path: '/homebrew', element: <HomebrewGalleryPage /> },
+      { path: '/reference/:type?/:id?', element: <ReferenceRoutes /> },
+    ],
+  },
+  {
+    element: (
+      <AuthGuard>
+        <AppLayout />
+      </AuthGuard>
+    ),
+    children: [
+      { index: true, element: <Navigate to="/campaigns" replace /> },
+      { path: '/campaigns', element: <CampaignListPage /> },
+      {
+        path: '/campaigns/:id/dm-screen',
+        element: (
+          <Suspense fallback={<LoadingSpinner />}>
+            <DmScreenPage />
+          </Suspense>
+        ),
+      },
+    ],
+  },
+  { path: '*', element: <NotFoundPage /> },
+]);
+```
+
+## Ekran ID (S-*) Kullanımı
+
+Yeni veya değişen sayfada katalog ID'sini koru:
+
+| ID | Route (spec) | Page dosyası |
+| --- | --- | --- |
+| S-LOGIN | `/login` | `LoginPage.tsx` |
+| S-DM-SCREEN | `/campaigns/:id/dm-screen` | `DmScreenPage.tsx` |
+| S-CHAR-BUILDER | `/characters/new` | `CharacterBuilderPage.tsx` |
+| S-HOMEBREW-GALLERY | `/homebrew` | `HomebrewGalleryPage.tsx` |
+| S-ADMIN-USERS | `/admin/users` | `AdminUsersPage.tsx` |
+
+Alan/state tablosu katalogda kalır — rule'da tekrarlanmaz. Yeni ekran prosedürü → `41-add-new-screen`.
+
+## Lazy Loading (Zorunlu)
+
+Ağır sayfalar code-split:
+
+```typescript
+// ✓ Doğru
+const DmScreenPage = lazy(() => import('../pages/dm-screen/DmScreenPage'));
+const CharacterBuilderPage = lazy(() => import('../pages/characters/CharacterBuilderPage'));
+const AdminUsersPage = lazy(() => import('../pages/admin/AdminUsersPage'));
+
+<Route
+  path="/campaigns/:id/dm-screen"
+  element={
+    <Suspense fallback={<LoadingSpinner />}>
+      <DmScreenPage />
+    </Suspense>
+  }
+/>
+
+// ✗ Yanlış — admin/ builder static import (bundle şişer)
+import { DmScreenPage } from './pages/dm-screen/DmScreenPage';
+```
+
+Zorunlu lazy: tüm `/admin/*`, `CharacterBuilderPage`, `DmScreenPage`, `CharacterEditPage` (multi-tab).
+
+## Dinamik Document Title
+
+Her route `useEffect` veya layout helper ile `<title>` günceller — İngilizce:
+
+```typescript
+// ✓ Doğru
+usePageTitle('My Campaigns — DnD Companion');
+usePageTitle(campaign ? `${campaign.name} — DnD Companion` : 'Campaign — DnD Companion');
+
+// ✗ Yanlış — statik index.html title veya Türkçe
+<title>Kampanyalarım</title>
+```
+
+404/500 sayfaları: `"Page Not Found — DnD Companion"`, `"Server Error — DnD Companion"`.
+
+## Mixed Auth Sayfaları
+
+`CharacterDetailPage`, `HomebrewDetailPage`: public kaynak misafire açık; layout Public veya App seçimi API response'a göre.
+
+```typescript
+// ✓ Doğru — API sonrası render; hata 404
+const { data, isLoading, error } = useGetCharacterQuery(id);
+if (isLoading) return <LoadingSpinner />;
+if (error) return <NotFoundPage />;
+// Public character: PublicLayout wrapper veya read-only sheet
+```
+
+Frontend'de `visibility === 'PUBLIC'` ile erken karar verme — API yetkisizde `404` döner.
+
+## Redirect ve Navigasyon
+
+| Durum | Hedef |
+| --- | --- |
+| `/` (auth) | `/campaigns` |
+| Login başarı | `location.state.from` veya `/campaigns` |
+| Logout | `/login` |
+| Admin değil `/admin/*` | `/` (`AdminGuard`) |
+| Geçersiz invite token | hata state + `/campaigns` |
+
+`Navigate` ile `replace` tercih et (login loop önleme).
+
+## Query Parametreleri
+
+Token tabanlı auth sayfaları query kullanır (`?token=`). `useSearchParams` ile oku; token yoksa inline error + link home.
+
+Path param UUID: route `/:id` — geçersiz format backend `400`; sayfa loading → error state.
+
+## Invite Route
+
+`/invite/:token` — auth zorunlu. Token path'te; join mutation sonrası `/campaigns/:id`. Invalid token → toast + campaign list.
+
+## Breadcrumb
+
+App layout header'da dinamik breadcrumb (`nav aria-label="Breadcrumb"`). Detay → `25-frontend-a11y.mdc`.
+
+## Oturum Restore ve Router
+
+`App.tsx`: refresh tamamlanmadan `<RouterProvider>` mount etme — flash redirect önlenir.
+
+```typescript
+// ✓ Doğru sıra
+if (isInitializing) return <LoadingSpinner fullScreen />;
+return <RouterProvider router={router} />;
+```
+
+## Session Expired Modal (S-SESSION-EXPIRED)
+
+Overlay route değil — global modal. Refresh başarısız + korumalı sayfada işlem:
+
+```typescript
+// ✓ Doğru — modal kapatılamaz
+<Dialog open={sessionExpired} onOpenChange={() => {}}>
+  <DialogContent hideCloseButton role="dialog" aria-modal="true">
+    <DialogTitle>Session expired</DialogTitle>
+    <p>Please sign in again to continue.</p>
+    <Button onClick={() => navigate('/login')}>Sign in</Button>
+  </DialogContent>
+</Dialog>
+```
+
+`Escape` devre dışı — `25-frontend-a11y.mdc` istisna.
+
+## Error Boundary ve 404/500
+
+- `NotFoundPage` (S-404): catch-all `*` route, Public layout.
+- `ServerErrorPage` (S-500): React error boundary fallback; retry + home link.
+- Boundary admin/app ağacına yakın — tek sayfa crash tüm app'i öldürmez.
+
+## Sidebar Nav Öğeleri (App)
+
+Campaigns, Characters, Reference, Homebrew Gallery, My Creations, My Collection, Profile. Admin kullanıcıda dropdown veya sidebar alt bölüm: Admin Panel → `/admin/users`.
+
+Nav link `NavLink` + `aria-current="page"` aktif route'ta.
+
+## Reference Route Parametreleri
+
+`/reference` — tüm tipler. `/reference/:type` — filtreli liste. `/reference/:type/:id` — detay. Public layout; auth opsiyonel.
+
+## Route Checklist
+
+```
+[ ] Path docs/05 Bölüm 2 ile uyumlu
+[ ] Doğru layout + guard stack
+[ ] Screen ID (S-*) docs/06 haritasında
+[ ] Lazy load (ağır sayfa)
+[ ] Dinamik İngilizce <title>
+[ ] Mixed auth sayfada API-driven render
+[ ] Guard UX only — yetki testi backend integration'da
+```
+
+## Anti-pattern'ler
+
+- ❌ Route'ta JWT decode ile yetki kontrolü
+- ❌ `emailVerifiedAt` için hard redirect (banner yeterli)
+- ❌ Layout'u page içinde tekrarlama
+- ❌ Türkçe route path (`/kampanyalar`)
+- ❌ `window.location.href` ile SPA içi nav (React Router kullan)
+- ❌ Catch-all route'u guard içine alma (404 herkese açık)
+- ❌ Ekran alan tablosunu page dosyasına kopyalama (katalog referansı)
+
+---
+
+Detay: `docs/05_FRONTEND_SPEC.md` Bölüm 2–3, 6, 12; `docs/06_SCREEN_CATALOG.md` Bölüm 1–3; `docs/07_SECURITY_IMPLEMENTATION.md` Bölüm 3

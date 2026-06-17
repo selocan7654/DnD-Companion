@@ -1,0 +1,135 @@
+---
+alwaysApply: true
+---
+
+# DnD Companion — Güvenlik Tabanı
+
+Hedef: **OWASP ASVS L1**. Her kod değişikliğinde aşağıdaki **6 zorunlu kontrol** uygulanır. Detaylı threat model ve auth akışı spec'te kalır — burada yalnızca executable checklist.
+
+## 6 Zorunlu Kontrol (Her Değişiklikte)
+
+```
+[ ] 1. Authorization  — Yazma endpoint'inde guard + policy; frontend hide ≠ güvenlik
+[ ] 2. Data access    — Yalnızca Prisma Client; raw SQL / string concat yasak
+[ ] 3. Token storage  — Access memory; refresh httpOnly+Secure+SameSite cookie; localStorage/sessionStorage yasak
+[ ] 4. PII leakage    — password_hash response/log yok; email yalnızca sahip veya ADMIN
+[ ] 5. Input boundary — DTO/schema validation; upload yalnızca png/jpeg/webp, max 5 MB, magic-byte; SVG yasak
+[ ] 6. Auth tests     — Yetki kuralı değiştiyse integration test aynı PR'da
+```
+
+Glob rule'lar (`11-auth`, `14-controllers` …) bu listeyi tekrarlamaz — **03'e uy** der.
+
+## 1. Authorization
+
+- Her `POST` | `PATCH` | `PUT` | `DELETE` → `JwtAuthGuard` + kaynak policy (`can(user, action, resource)`).
+- `ADMIN` bypass policy'nin ilk adımında; `USER` sahiplik/ilişki kuralları ([AUTH-007]).
+- Email doğrulama gerektiren eylemler → `EmailVerifiedGuard` (`403` + `EMAIL_NOT_VERIFIED`).
+- Yetkisiz kaynak erişiminde **404** (varlık ifşası yok); kendi kaynağında yetki hatası → **403**.
+- WebSocket room join → campaign üyelik kontrolü ([AUTH-004]).
+
+```typescript
+// ✓ Doğru — guard stack + policy
+@UseGuards(JwtAuthGuard, EmailVerifiedGuard)
+@Patch(':id')
+async update(@CurrentUser() user, @Param('id') id: string, @Body() dto: UpdateDto) {
+  const campaign = await this.service.findOrFail(id);
+  if (!this.policy.canUpdate(user, campaign)) throw new ForbiddenException();
+  return this.service.update(id, dto);
+}
+
+// ✗ Yanlış — guard'sız yazma
+@Post()
+async create(@Body() dto: CreateDto) { ... }
+```
+
+## 2. Data Access
+
+- Tüm DB: Prisma Client. `$queryRaw` yalnızca parametreli, review zorunlu edge case.
+- Şifre: Argon2id (`memory=19MB, iterations=2, parallelism=1`); plain text loglanmaz.
+
+## 3. Token Storage
+
+| Token | Ömür | Saklama |
+| --- | --- | --- |
+| Access JWT | 15 dk | JS memory; `Authorization: Bearer` |
+| Refresh | 30 gün | httpOnly cookie; hash DB'de |
+
+- Refresh rotation + reuse detection → tüm refresh token'lar iptal.
+- JWT payload'da PII yok (`sub`, `role`, `emailVerified` yeterli).
+- CSRF: refresh cookie `SameSite=Strict`; diğer endpoint'ler Bearer header.
+
+```typescript
+// ✗ Yanlış — frontend
+localStorage.setItem('accessToken', token);
+```
+
+## 4. PII Leakage
+
+- `password_hash` hiçbir DTO, serializer veya log çıktısında.
+- `email`: yalnızca `requester.id === user.id` veya `requester.role === ADMIN`.
+- Diğer kullanıcılara public profil: `username` + `avatarUrl`.
+- Login/register/reset: genel hata mesajı — account enumeration yok.
+
+## 5. Input Boundary
+
+- Backend: class-validator DTO; doğrulanmamış input controller'a ulaşmaz.
+- Frontend: Zod + RHF; shared şema `packages/shared`.
+- Rate limit: `/auth/login`, `/register`, `/password-reset` → 5 req / 15 dk / IP (Redis).
+- Upload: presigned URL; MIME + magic-byte; SVG reddedilir.
+- Production: HTTPS + HSTS; güvenlik header'ları ([SEC-007]–[SEC-008]).
+
+## 6. Auth Tests
+
+Yetki matrisi değişikliği → integration test matrisi güncellenir:
+
+- Sahip / sahip değil, campaign DM / üye / dışarıdan
+- `ADMIN` / `USER`, doğrulanmış / doğrulanmamış, deaktive kullanıcı
+
+Testsiz yetki kuralı merge **edilemez** ([TEST-002]).
+
+## Read Endpoint Kuralları
+
+- Public read: resmi `reference/*`, published homebrew galeri — auth opsiyonel.
+- Protected read: campaign/character sahiplik veya üyelik policy ile — yetkisiz → **404**.
+- `email` response'ta yalnızca sahip/admin; listede `username` + `avatarUrl`.
+- Deaktive kullanıcı (`is_active = false`) içeriği normal kullanıcılardan gizli; ADMIN görür ([AP-002]).
+
+## Audit Log (MVP)
+
+Admin eylemleri append-only `audit_logs` — ROLE_CHANGED, USER_DEACTIVATED, CONTENT_DELETED vb. UI yok (post-MVP); veri INSERT-only, UPDATE/DELETE yasak. Normal kullanıcı CRUD loglanmaz.
+
+## Transport ve CORS
+
+- Production/staging: HTTPS zorunlu, HSTS header.
+- CORS allowlist: frontend origin env var; credentials yalnızca refresh cookie endpoint'i için.
+- Güvenlik header'ları: `X-Content-Type-Options`, `X-Frame-Options`, CSP (detay spec'te).
+
+## Auth Akışı Özet (Implementasyon Kontrol)
+
+| Akış | Kritik kontrol |
+| --- | --- |
+| Register | Argon2id hash; `email_verified_at = NULL`; token hash DB'de |
+| Login | Genel hata mesajı; deaktive kullanıcı reddedilir |
+| Refresh | Rotation + reuse → tüm refresh iptal |
+| Password reset | Token tek kullanım; sonrası tüm refresh iptal |
+| Logout | Refresh revoke + cookie clear |
+
+Sequence diagram ve token şeması → `docs/07_SECURITY_IMPLEMENTATION.md` Bölüm 2–3.
+
+## Secrets ve Bağımlılıklar
+
+- Secret'lar env var; `.env` commit edilmez; production secret store.
+- CI: `pnpm audit --audit-level=critical` — critical zafiyet build kırar.
+- Structured JSON log; şifre/token/refresh değeri loglanmaz.
+
+## Bilinçli MVP Dışı
+
+MFA, HaveIBeenPwned, WAF, virüs tarama, chain-hash audit, hard delete / erasure — **implement etme**.
+
+## Agent Yasak Özeti
+
+[CODE-004] maddeleri 1–8 → `01-coding-philosophy.mdc`. Güvenlikle kesişenler: raw SQL, token storage, guard'sız yazma, PII, SVG, testsiz yetki.
+
+---
+
+Detay: `docs/07_SECURITY_IMPLEMENTATION.md`; `docs/mimari-kararlar.md` Bölüm 10 [SEC-001]–[SEC-016], Bölüm 17 [CODE-004]; `docs/03_API_CONTRACTS.md` Bölüm 2

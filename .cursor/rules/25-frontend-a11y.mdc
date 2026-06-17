@@ -1,0 +1,244 @@
+---
+description: WCAG 2.1 AA — klavye, ARIA, focus, kontrast, form a11y. apps/web tsx bileşen düzenlemelerinde.
+globs:
+  - "apps/web/**/*.tsx"
+---
+
+# DnD Companion — Frontend Erişilebilirlik (a11y)
+
+Hedef: **WCAG 2.1 Level AA** temel gereksinimleri. Tam üçüncü parti audit MVP dışı; aşağıdaki kurallar **her tsx değişikliğinde** zorunlu.
+
+Kalite kapısı özeti → `04-quality-gates.mdc`; form label detayı → `22-frontend-forms.mdc`.
+
+## Temel İlkeler
+
+1. Tüm işlev klavye ile erişilebilir.
+2. Görsel bilgi renk tek başına taşınmaz.
+3. Focus her zaman görünür (`focus-visible:ring`).
+4. Anlamlı isimler: label, `aria-label`, veya `aria-labelledby`.
+5. Dinamik içerik uygun `aria-live` ile duyurulur.
+
+## Klavye Navigasyon
+
+| Öğe | Beklenen |
+| --- | --- |
+| Link, button, input | `Tab` / `Shift+Tab` sırası mantıklı DOM order |
+| Modal | Focus trap; `Escape` kapatır |
+| Dropdown | `ArrowUp`/`ArrowDown`, `Enter` seç, `Escape` kapat |
+| Tabs (builder, DM Screen) | `ArrowLeft`/`ArrowRight` tab geçişi |
+| Skip link | İlk focusable: "Skip to main content" (focus'ta görünür) |
+
+```tsx
+// ✓ Doğru — skip link (AppLayout)
+<a
+  href="#main-content"
+  className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:p-4"
+>
+  Skip to main content
+</a>
+<main id="main-content" tabIndex={-1}>...</main>
+
+// ✗ Yanlış — div onClick without keyboard
+<div onClick={handleClick}>Delete</div>
+```
+
+`SessionExpiredModal`: `Escape` ile kapatılamaz — kullanıcı login'e yönlendirilir.
+
+## Focus Yönetimi
+
+```tsx
+// ✓ Doğru — focus ring
+className="outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+
+// ✗ Yanlış — focus gizleme
+className="outline-none focus:outline-none"
+```
+
+Modal açılış: focus ilk focusable öğeye. Kapanış: focus trigger'a dön.
+
+Form submit hata: ilk `aria-invalid` alana focus taşı.
+
+Route değişimi: `main` focus (opsiyonel `tabIndex={-1}`) veya `aria-live` "Page loaded".
+
+## ARIA — Bileşen Matrisi (Özet)
+
+| Bileşen | Gerekli ARIA |
+| --- | --- |
+| Main nav | `<nav aria-label="Main navigation">` |
+| Admin nav | `<nav aria-label="Admin navigation">` |
+| Breadcrumb | `<nav aria-label="Breadcrumb">`, `aria-current="page"` aktif |
+| Modal/Dialog | `role="dialog"`, `aria-modal="true"`, `aria-labelledby` |
+| Alert banner | `role="alert"`, `aria-live="assertive"` (email verify) |
+| Toast | `role="status"`, `aria-live="polite"` |
+| Loading | `role="status"`, `aria-label="Loading"` |
+| HP bar | `role="progressbar"`, `aria-valuenow/min/max` |
+| Death saves | `aria-label="Death save success 1 of 3"` per slot |
+| İkon buton | `aria-label` (metin yoksa zorunlu) |
+| Tab group | `role="tablist"`; tab `role="tab"` + `aria-selected`; panel `role="tabpanel"` |
+| Sortable table th | `aria-sort="ascending|descending|none"` |
+| Skeleton | `aria-hidden="true"` |
+| Dekoratif img | `alt=""` veya `aria-hidden="true"` |
+
+Tam tablo genişletme → `docs/05_FRONTEND_SPEC.md` Bölüm 13; rule'da kopyalama sınırı.
+
+```tsx
+// ✓ Doğru — icon button
+<Button variant="ghost" size="icon" aria-label="Delete character" onClick={onDelete}>
+  <Trash2 className="h-4 w-4" aria-hidden="true" />
+</Button>
+
+// ✗ Yanlış
+<button><Trash2 /></button>
+```
+
+## Form Erişilebilirliği
+
+shadcn `FormField` label + `htmlFor` otomatik. Manuel input:
+
+```tsx
+// ✓ Doğru
+<Label htmlFor="campaign-name">Campaign name</Label>
+<Input
+  id="campaign-name"
+  aria-invalid={!!errors.name}
+  aria-describedby={errors.name ? 'campaign-name-error' : undefined}
+  aria-required="true"
+/>
+{errors.name && (
+  <p id="campaign-name-error" role="alert">{errors.name.message}</p>
+)}
+```
+
+Submit loading: `aria-busy="true"` + `disabled`. Checkbox/radio: grupta `fieldset` + `legend` veya `aria-labelledby`.
+
+Character builder tab'ları: `TabsList` `aria-label="Character builder steps"`.
+
+## Renk ve Kontrast
+
+- Normal metin: min **4.5:1** kontrast.
+- Büyük metin (18px+ bold): min **3:1**.
+- HP bar: renk + sayısal değer her zaman görünür.
+- Badge/status: renk **ve** metin (`Published`, `Draft`).
+- Condition ikonları: tooltip veya metin eşlik.
+
+```tsx
+// ✓ Doğru — HP gösterimi
+<div className="flex items-center gap-2">
+  <Progress value={hp} aria-label={`Hit points ${hp} of ${maxHp}`} />
+  <span>{hp} / {maxHp}</span>
+</div>
+
+// ✗ Yanlış — sadece kırmızı bar
+<div className="bg-red-500 h-2" style={{ width: `${pct}%` }} />
+```
+
+## Görsel ve Medya
+
+| Tür | Alt metin |
+| --- | --- |
+| Avatar, karakter portresi | Anlamlı `alt` (karakter adı) |
+| Campaign banner (dekoratif) | `alt=""` |
+| Homebrew kart görseli | Homebrew adı |
+| İkon (lucide) | `aria-hidden="true"` (yanında metin varsa) |
+
+## Sayfa Başlıkları ve Live Regions
+
+```typescript
+// hooks/usePageTitle.ts — ✓ Doğru
+useEffect(() => {
+  document.title = title;
+}, [title]);
+// "My Campaigns — DnD Companion"
+```
+
+Route değişiminde opsiyonel gizli live region:
+
+```tsx
+<div aria-live="polite" className="sr-only">{pageAnnouncement}</div>
+```
+
+## DM Screen ve Live Fields a11y
+
+`LiveFieldCard` güncellemeleri: değer değişince `aria-live="polite"` kısa duyuru (spam önlemek için debounce 500ms+).
+
+Death save toggle: her slot button veya checkbox + açıklayıcı label.
+
+Mobil DM Screen tabs: `aria-label="DM Screen sections"` (`24-frontend-components.mdc`).
+
+## DataTable (Admin)
+
+- `<table>` semantic markup; header `scope="col"`.
+- Sıralanabilir sütun: button inside `th` + `aria-sort`.
+- Satır action menüsü: `aria-label="Actions for {username}"`.
+
+## Mobil Nav (Sheet)
+
+Hamburger açık off-canvas: focus trap, `Escape` kapat, dış tıklama kapat. `aria-expanded` hamburger butonda.
+
+## Test ve Self-Review
+
+Vitest + Testing Library:
+
+```typescript
+// ✓ Doğru — erişilebilir sorgu
+expect(screen.getByRole('button', { name: 'Delete character' })).toBeInTheDocument();
+
+// ✗ Yanlış — implementation detail
+expect(screen.getByClassName('btn-delete')).toBeInTheDocument();
+```
+
+Manuel: Tab ile tam akış; modal trap; form hata focus.
+
+## Accordion ve Collapse (Mobil Sheet)
+
+Character sheet mobil bölümleri `Accordion` — her `AccordionTrigger` button semantics. Tek seferde bir veya çoklu açık — UX tercihi; keyboard `Enter`/`Space` toggle.
+
+`prefers-reduced-motion`: `motion-safe:` Tailwind variant ile animasyon kısıtla.
+
+## Combobox ve Command (Arama)
+
+Homebrew/reference arama `Command` + `Popover`: input `aria-expanded`, liste `role="listbox"`, option `role="option"`. Seçim sonrası focus input'a dön.
+
+## LiveFieldCard (DM Screen)
+
+HP input: `aria-label="Current hit points"`. Condition checkbox: label metinli. Death save: üç slot — success/failure görsel + `aria-label`.
+
+WS güncelleme announce debounce — aynı alan 500ms içinde tek `aria-live` polite.
+
+## Tooltip ve Disabled Actions
+
+Email doğrulanmamış yazma butonu: `Tooltip` + `TooltipTrigger asChild` wrapper — screen reader `aria-describedby` tooltip id. Sadece `disabled` without explanation yasak.
+
+## a11y Checklist (Her PR)
+
+```
+[ ] Tüm interaktif öğeler klavye erişilebilir
+[ ] İkon butonlarda aria-label
+[ ] Form: label + aria-invalid + describedby
+[ ] Modal: dialog ARIA + focus trap
+[ ] Focus ring görünür (outline-none tek başına yok)
+[ ] Durum renk + metin/ikon
+[ ] Dinamik İngilizce document.title
+[ ] Skeleton aria-hidden
+[ ] Skip to main content (App layout)
+[ ] HP/death saves progressbar veya açıklayıcı label
+```
+
+## Anti-pattern'ler
+
+- ❌ `div`/`span` ile button davranışı (role=button hack yerine `<button>`)
+- ❌ Placeholder-only label (gerçek `<label>` yok)
+- ❌ `tabIndex={0}` ile DOM sırası bozma
+- ❌ Otomatik oynayan animasyon (prefers-reduced-motion ignore)
+- ❌ Toast-only hata (form alanı bağlantısız)
+- ❌ `aria-label` İngilizce dışı dil
+- ❌ Kontrast düşük gri placeholder tek bilgi kaynağı
+- ❌ Live region spam (her WS tick assertive announce)
+
+## Bilinçli MVP Sınırı
+
+Tam WCAG audit, axe-ci gate, screen reader test matrisi post-MVP. Yine de yukarıdaki kurallar merge blocker sayılır (`04-quality-gates.mdc`).
+
+---
+
+Detay: `docs/05_FRONTEND_SPEC.md` Bölüm 13; `docs/06_SCREEN_CATALOG.md` ortak bileşen notları; `docs/05_FRONTEND_SPEC.md` Bölüm 14 (performans — CLS, lazy img)

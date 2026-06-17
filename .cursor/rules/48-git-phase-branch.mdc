@@ -1,0 +1,281 @@
+---
+description: Step-by-step procedure for faz implementation git workflow (feature branch, Faz N — İterasyon M, PR, phase .mdc invoke). Use when starting roadmap phase work, phase iteration chat, or aligning branch/PR with 10_IMPLEMENTATION_ROADMAP.
+---
+
+# Git Phase Branch — Procedure
+
+**One session = one PR.** Faz implementation never commits directly to `main`. Each chat aligns with one roadmap iteration and loads the matching phase `.mdc`.
+
+Workflow source: `docs/09_DEV_WORKFLOW.md` Bölüm 5–6, `docs/10_IMPLEMENTATION_ROADMAP.md` Bölüm 1, 8–9.
+
+## Step 0: Preconditions
+
+- [ ] Target faz and iteration identified in `docs/10_IMPLEMENTATION_ROADMAP.md` Bölüm 8 (oturum tablosu).
+- [ ] Phase rule exists: `.cursor/rules/5x-phase-*.mdc` (if missing → invoke `@phase-creator` skill first).
+- [ ] Prior faz dependencies merged (see Bölüm 2 dependency graph).
+- [ ] `main` pulled and CI green.
+
+```
+Faz 1 → Faz 2, Faz 3 (parallel OK)
+Faz 2 + Faz 3 → Faz 4
+Faz 4 + öncekiler → Faz 5
+```
+
+## Step 1: Load Context (Chat Start)
+
+Agent message format:
+
+```
+Faz N — İterasyon M: <short title>
+```
+
+Load documents per roadmap oturum table (`docs/10` Bölüm 8):
+
+| Example | Docs |
+| --- | --- |
+| 1.3 Auth backend | `03` auth §, `07`, `08` |
+| 2.2 Campaign backend | `03` campaigns §, `07` |
+| 4.1 WebSocket gateway | `04` §9, `03` §14 |
+| 4.2 DM Screen FE | `06` Grup 3, `05` §8 |
+
+Invoke phase rule:
+
+```
+@50-phase-01-...mdc   (exact filename from .cursor/rules/)
+```
+
+Phase `.mdc` contains iteration blueprint — follow its file list and Done criteria without re-planning.
+
+## Step 2: Create Feature Branch
+
+From updated `main`:
+
+```bash
+git checkout main
+git pull origin main
+git checkout -b <type>/<short-description>
+```
+
+Branch naming (`docs/09` Bölüm 5):
+
+```
+feat/campaign-invite-regeneration
+feat/auth-refresh-rotation
+fix/ws-join-campaign-forbidden
+test/character-ownership-matrix
+chore/ci-prisma-migrate-deploy
+```
+
+Align name with iteration scope — one logical deliverable.
+
+**Forbidden:** work on `main`, force-push `main`.
+
+## Step 3: Implement Iteration Scope
+
+Respect phase `.mdc` grain:
+
+```
+[ ] ≤12 files per chat/PR (phase-creator guideline)
+[ ] Only iteration M deliverables — no "while here" faz N+1 work
+[ ] Use how-tos: @40 endpoint, @41 screen, @42 migration, @43 policy, @47 WS
+[ ] MVP out-of-scope items not added (00-project-identity)
+```
+
+Human gates (`docs/10` Bölüm 9):
+
+- Agent does **not** merge to `main` without user approval.
+- Agent does **not** advance faz without human faz sign-off.
+
+## Step 4: Conventional Commits
+
+```
+<type>(<scope>): <description>
+
+feat(campaigns): add invite link regeneration endpoint
+test(characters): add ownership guard integration tests
+fix(websocket): reject join-campaign for non-members
+```
+
+Types: `feat` | `fix` | `chore` | `refactor` | `test` | `docs`
+
+Scopes: `auth`, `campaigns`, `characters`, `homebrew`, `web`, `shared`, `ci`, `db`, `websocket`, etc.
+
+## Step 5: Pre-PR Local Gates
+
+```bash
+docker compose up -d
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm --filter web build && pnpm --filter api build
+```
+
+If migration in PR:
+
+```bash
+pnpm --filter api prisma migrate dev   # local only
+pnpm --filter api prisma db seed
+```
+
+Checklist (`docs/09` Bölüm 6):
+
+```
+[ ] Conventional commit messages
+[ ] Auth matrix tests if policy touched
+[ ] .env.example updated if new env var
+[ ] Seed works after migration
+[ ] UI strings English
+[ ] No // TODO: mimari karar — unless tracked open decision
+```
+
+## Step 6: Push and Open PR
+
+```bash
+git push -u origin HEAD
+gh pr create --title "feat(campaigns): add invite link regeneration" --body "..."
+```
+
+PR title = squash merge commit (Conventional Commits).
+
+PR body template (`docs/09` Bölüm 6):
+
+```markdown
+## Context
+Faz 2 — İterasyon 2.2: Campaign backend (CRUD + invite + membership)
+
+## Ne değişti?
+…
+
+## Neden?
+…
+
+## Nasıl test edildi?
+- [ ] Unit tests …
+- [ ] Integration tests …
+- [ ] Manual …
+
+## Kontrol listesi
+- [ ] lint / typecheck / test green
+- [ ] docs/03 updated if API changed
+- [ ] Phase rule Done criteria met
+```
+
+## Step 7: CI and Review
+
+Required checks (`docs/09` Bölüm 7):
+
+| Job | Command |
+| --- | --- |
+| lint | `pnpm lint` + tsc |
+| test-backend | `pnpm --filter api test --ci` |
+| test-frontend | `pnpm --filter web test --ci` |
+| security | `pnpm audit --audit-level=critical` |
+| build | web + api build |
+
+Fix failures via `@46-fix-failing-test`. User merges when green + reviewed.
+
+## Step 8: After Merge — Next Iteration
+
+1. Checkout `main`, pull.
+2. Confirm iteration M Done in phase `.mdc`.
+3. Start **new branch** for iteration M+1.
+4. New chat: `Faz N — İterasyon M+1: …`
+
+Do not stack unrelated iterations on one branch.
+
+## Step 9: Faz Completion (Human Gate)
+
+At faz end (`docs/10` Bölüm 9):
+
+| Control | Verify |
+| --- | --- |
+| CI green | GitHub Actions |
+| Auth matrix complete | `docs/08` Bölüm 5 for faz resources |
+| Seed works | `docker compose down -v` → full reset |
+| UI functional | manual human test |
+| No open TODO karar | code scan |
+
+Agent **stops** and waits for human faz approval before planning next faz.
+
+## Step 10: Phase Rule Missing?
+
+If `50+-phase-*.mdc` does not exist for faz N:
+
+1. Stop implementation.
+2. Run **`@phase-creator`** skill (not rules-architect).
+3. phase-creator updates `docs/10` if needed → writes phase `.mdc`.
+4. Resume with Step 1.
+
+rules-architect does **not** write phase `.mdc` files.
+
+## Anti-patterns
+
+- ❌ Multiple faz iterations in one PR
+- ❌ Direct push to `main`
+- ❌ Starting code without phase `.mdc` or roadmap iteration ID
+- ❌ Skipping integration tests "will add in next iteration"
+- ❌ Merging without user approval
+- ❌ Production deploy from agent (Faz 5 — human only)
+
+## Oturum ↔ Branch Örnekleri
+
+| Chat opener | Branch örneği |
+| --- | --- |
+| Faz 1 — İterasyon 1.3: Auth backend | `feat/auth-register-login-refresh` |
+| Faz 2 — İterasyon 2.2: Campaign CRUD | `feat/campaign-crud-invite` |
+| Faz 4 — İterasyon 4.1: WebSocket gateway | `feat/websocket-gateway-redis` |
+| Faz 4 — İterasyon 4.6: WS tests | `test/websocket-join-campaign-matrix` |
+
+## Docs vs Phase Rule
+
+| Source | Holds |
+| --- | --- |
+| `docs/10` Bölüm 8 | Oturum tablosu, yüklenecek doc listesi |
+| `50+-phase-*.mdc` | Iterasyon blueprint, dosya listesi, Done |
+| How-to 40–47 | Teknik prosedür detayı |
+
+Phase rule wins for iteration scope; docs win on spec conflict.
+
+## Parallel Faz 2 / Faz 3
+
+Branches from same `main` tip OK if teams coordinate — merge conflicts resolved at PR time. Do not mix Faz 2 and Faz 3 work in **one** branch.
+
+## Agent Yasakları (Özet)
+
+From `01-coding-philosophy.mdc` + roadmap §1:
+
+- `main`'e push yok
+- Production deploy yok
+- Faz geçişi onayı yok
+- Açık karar varsayımı yok
+
+## Implementasyon Sonrası
+
+When faz iteration merged, optional **`@phase-controller`** skill:
+
+- Gap audit kod vs docs
+- `Docs/fix-reports/` output
+- Does not replace human faz gate
+
+## Troubleshooting
+
+| Issue | Resolution |
+| --- | --- |
+| Phase .mdc missing | `@phase-creator` — not rules-architect |
+| PR too large | Split per iteration; use `@split-to-prs` if needed |
+| CI red on main after merge | New branch `fix/ci-...` from main |
+| Dependency not merged | Wait for prerequisite faz PR |
+
+## Quick Reference
+
+| Item | Value |
+| --- | --- |
+| Chat opener | `Faz N — İterasyon M: <title>` |
+| Branch | `<type>/<kebab-description>` |
+| Merge strategy | Squash merge |
+| Phase rules path | `.cursor/rules/5x-phase-*.mdc` |
+| Post-impl audit | `@phase-controller` skill |
+
+---
+
+Detay: `docs/09_DEV_WORKFLOW.md` Bölüm 5–7; `docs/10_IMPLEMENTATION_ROADMAP.md` Bölüm 1, 8–9; `04-quality-gates.mdc`

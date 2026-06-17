@@ -1,0 +1,39 @@
+{
+  "name": "dnd-companion",
+  "version": "0.0.0",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev:api": "pnpm --filter @dnd-companion/api dev",
+    "dev:web": "pnpm --filter @dnd-companion/web dev",
+    "lint": "eslint .",
+    "typecheck": "pnpm --filter @dnd-companion/api exec tsc --noEmit && pnpm --filter @dnd-companion/web exec tsc --noEmit && pnpm --filter @dnd-companion/shared exec tsc --noEmit",
+    "test": "pnpm --filter @dnd-companion/api test && pnpm --filter @dnd-companion/web test",
+    "build": "pnpm --filter @dnd-companion/web build && pnpm --filter @dnd-companion/api build",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "eslint": "^9.17.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "eslint-plugin-react-refresh": "^0.4.16",
+    "globals": "^15.14.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.2.11",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.2"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,mjs,cjs,json,md,yml,yaml}": [
+      "prettier --write"
+    ],
+    "*.{ts,tsx}": [
+      "eslint --fix"
+    ]
+  }
+}

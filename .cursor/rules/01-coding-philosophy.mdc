@@ -1,0 +1,139 @@
+---
+alwaysApply: true
+---
+
+# DnD Companion — Kodlama Felsefesi
+
+Bu proje **doküman-öncelikli vibe coding** ile geliştirilir. Agent mimari karar almaz; spec `docs/` içindedir. Her oturumda önce ilgili doc bölümlerini oku, sonra kodla.
+
+## Oturum Disiplini
+
+```
+Docs oku → feature branch → minimal diff → test → PR → insan onayı
+```
+
+- **Bir oturum = bir PR.** Tek feature branch; oturumlar arası bağımlılık PR merge sırası ile yönetilir.
+- **İnsan gate'leri atlanmaz:** Agent kullanıcı onayı olmadan `main`'e merge etmez, production'a deploy etmez, faz geçişi yapmaz.
+- **Belirsizlikte dur:** Karar verilmemiş konuda (Bölüm 18 açık kararlar) varsayım yapma — kullanıcıya sor veya `// TODO: [KONU] — mimari karar gerekiyor` bırak.
+
+### Oturum Başı Docs Yükleme
+
+Roadmap Bölüm 8 oturum planına uy. Genel sıra:
+
+1. `mimari-kararlar.md` — ilgili karar ID'leri
+2. Domain/API doc — değişen kaynak tipi
+3. `07` veya `08` — güvenlik/test gerekiyorsa
+4. İlgili `@NN-phase-*` veya glob/how-to rule
+
+Spec tablosunu chat'e yapıştırma — path + bölüm referansı yeterli.
+
+### Faz Çalışması
+
+Roadmap faz implementasyonunda feature branch zorunlu (`48-git-phase-branch` how-to). Mesajda `Faz N — İterasyon M` belirt; `@50+-phase-*` rule yükle.
+
+## MVP Scope Koruması
+
+MVP tek fazda tüm özellik alanlarını kapsar; yine de **kapsam dışı listesine** (`00-project-identity.mdc`) kod ekleme:
+
+- "İleride lazım olur" diye altyapı kurma (MFA, E2E paketi, audit UI)
+- Post-MVP widget'lar (dice roller, combat tracker)
+- Genel amaçlı abstraction — mevcut NestJS modül / policy desenini genişlet
+
+Yeni özellik isteği docs'ta yoksa önce doc güncelle veya kullanıcıdan onay al.
+
+## Test-First Öncelik
+
+Hata maliyeti yüksek katmanlarda test **önce** veya **aynı PR'da** gelir:
+
+1. Backend integration — yetkilendirme, auth akışları, veri bütünlüğü (gerçek DB)
+2. Backend unit — policy fonksiyonları, service iş mantığı
+3. Frontend component — auth guard, form validation, koşullu render
+4. E2E — MVP'de **yok**
+
+Yetki matrisi (`[AUTH-007]`) içeren her endpoint → integration test **zorunlu**; testsiz merge edilemez.
+
+## Minimal Diff Prensibi
+
+- Yalnızca görevle ilgili dosyalara dokun; drive-by refactor yapma.
+- Mevcut modül yapısına uy (`auth/`, `campaigns/`, `common/policies/` …).
+- Spec tablosunu rule veya yoruma kopyalama — doc path referansı ver.
+- Shared tipler `packages/shared`'da tek tanım; FE/BE çift şema yazma.
+
+## Anti-Pattern'ler
+
+- ❌ Frontend'de yetki kontrolü yapıp backend guard atlamak
+- ❌ `any` ile DTO/response gevşetmek — tip güvenliği uçtan uca
+- ❌ Prisma dışı ORM veya alternatif DB katmanı ekleme
+- ❌ TanStack Query + RTK Query çift data-fetch katmanı (stack: RTK Query)
+- ❌ Post-MVP özellik için "placeholder" UI + dead code
+- ❌ Açık karar için silent default (örn. deployment platformu seçmek)
+- ❌ Testleri sonraki PR'a ertelemek — yetki testi aynı PR'da
+
+## İyi / Kötü Örnek (Kapsam)
+
+```typescript
+// ✓ Doğru — tek modül, policy ayrık
+// campaigns/campaigns.service.ts — iş mantığı
+// common/policies/campaign.policy.ts — canUpdate()
+
+// ✗ Yanlış — controller içinde 40 satır yetki if'i
+@Patch(':id')
+async update(@CurrentUser() user, @Param('id') id: string) {
+  const c = await this.prisma.campaign.findUnique({ where: { id } });
+  if (c.ownerId !== user.id && user.role !== 'ADMIN') throw new ForbiddenException();
+  // ...
+}
+```
+
+## Self-Review Checklist (PR Öncesi)
+
+Her değişiklikten önce agent şunları doğrular:
+
+- [ ] İlgili `docs/` bölümü okundu; implementasyon spec ile uyumlu
+- [ ] `03-security-baseline.mdc` 6'lı checklist geçti
+- [ ] Yazma endpoint'lerinde guard + policy var
+- [ ] Yetki değişikliği varsa integration test eklendi/güncellendi
+- [ ] Yeni env var → `.env.example` güncellendi
+- [ ] Migration varsa seed hâlâ çalışıyor
+- [ ] UI metinleri İngilizce; kullanıcıya dönük mesajlar İngilizce
+- [ ] `pnpm lint` + `pnpm typecheck` + ilgili testler yeşil
+- [ ] Açık karar (Bölüm 18) için varsayım yapılmadı
+
+## Agent Yasakları (Tam Liste)
+
+`docs/mimari-kararlar.md` **[CODE-004]** ve `docs/10_IMPLEMENTATION_ROADMAP.md` §1:
+
+| # | Yasak |
+| --- | --- |
+| 1 | Raw SQL veya string concatenation ile DB erişimi — yalnızca Prisma Client |
+| 2 | Access token'ı localStorage/sessionStorage'da saklama |
+| 3 | Guard'sız POST/PATCH/PUT/DELETE endpoint commit etme |
+| 4 | `password_hash` herhangi bir DTO/response'ta; `email` sahip/admin dışına |
+| 5 | SVG dosya yükleme — yalnızca png/jpeg/webp |
+| 6 | Yetki kuralı içeren endpoint'i integration test olmadan merge etme |
+| 7 | `main` branch'ine doğrudan push |
+| 8 | Bölüm 18 açık kararlarında varsayım yaparak ilerleme |
+
+Ek yasaklar (roadmap §1): production deploy ve faz geçişi kullanıcı onayı olmadan.
+
+## Belirsizlik ve Açık Kararlar
+
+🔴/🟠 öncelikli açık kararlar tamamlanmadan ilgili kod yazılmaz:
+
+- `[INF-OPEN-1]` Deployment platformu
+- `[INF-OPEN-3]` Backup / PITR stratejisi
+
+🟢 düşük öncelikli maddeler için mevcut doc kararını uygula; genişletme yapma.
+
+## Done Definition (Oturum Sonu)
+
+- Feature branch'te çalışan kod + testler
+- Conventional Commit mesajları
+- PR açıklaması: ne değişti, neden, nasıl test edildi
+- Kullanıcı merge onayı beklenir — agent kendi başına merge etmez
+
+Faz çalışmasında `@NN-phase-*` rule + roadmap oturum planına uy.
+
+---
+
+Detay: `docs/10_IMPLEMENTATION_ROADMAP.md` Bölüm 1; `docs/mimari-kararlar.md` Bölüm 17 [CODE-004], 18; `docs/09_DEV_WORKFLOW.md` Bölüm 5–7
