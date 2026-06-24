@@ -1,6 +1,8 @@
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
 import { LoggerModule } from 'nestjs-pino';
 
 import { AuthModule } from './auth/auth.module';
@@ -8,8 +10,12 @@ import { EmailVerifiedGuard } from './common/guards/email-verified.guard';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
+import {
+  AUTH_THROTTLE_LIMIT,
+  AUTH_THROTTLE_TTL_MS,
+} from './common/throttle/auth-throttle.constants';
 import { PrismaModule } from './common/prisma/prisma.module';
-import { validateEnv } from './config/env.validation';
+import { validateEnv, EnvConfig } from './config/env.validation';
 import { HealthModule } from './health/health.module';
 
 @Module({
@@ -18,6 +24,20 @@ import { HealthModule } from './health/health.module';
       isGlobal: true,
       envFilePath: ['.env', '../../.env'],
       validate: validateEnv,
+    }),
+    ThrottlerModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService<EnvConfig, true>) => ({
+        throttlers: [
+          {
+            name: 'auth',
+            ttl: AUTH_THROTTLE_TTL_MS,
+            limit: AUTH_THROTTLE_LIMIT,
+          },
+        ],
+        storage: new ThrottlerStorageRedisService(configService.get('REDIS_URL', { infer: true })),
+      }),
     }),
     LoggerModule.forRoot({
       pinoHttp: {

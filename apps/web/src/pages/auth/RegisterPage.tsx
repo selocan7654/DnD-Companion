@@ -19,6 +19,7 @@ import { Input } from '@/components/ui/input';
 import { registerFormSchema, type RegisterFormInput } from '@/features/auth/schemas';
 import { usePageTitle } from '@/hooks/usePageTitle';
 import { getApiErrorMessage, getApiErrorStatus } from '@/lib/api-error';
+import { toast } from '@/hooks/use-toast';
 import type { ApiErrorBody } from '@/types/api';
 import { useLoginMutation, useRegisterMutation } from '@/store/api/authApi';
 import { setCredentials } from '@/store/authSlice';
@@ -70,6 +71,10 @@ export function RegisterPage() {
     } catch (error) {
       const status = getApiErrorStatus(error);
       if (status === 429) {
+        toast({
+          title: 'Too many requests',
+          description: 'Too many requests. Please try again later.',
+        });
         setApiError('Too many requests. Please try again later.');
         return;
       }

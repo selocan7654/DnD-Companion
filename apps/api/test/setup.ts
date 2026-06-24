@@ -2,6 +2,7 @@ import { execSync } from 'node:child_process';
 import { resolve } from 'node:path';
 
 import { PrismaClient } from '@prisma/client';
+import Redis from 'ioredis';
 
 const apiRoot = resolve(__dirname, '..');
 
@@ -25,7 +26,13 @@ ensureTestEnv();
 
 export const prisma = new PrismaClient();
 
+const redis = new Redis(process.env.REDIS_URL ?? 'redis://localhost:6379', {
+  maxRetriesPerRequest: 1,
+  lazyConnect: true,
+});
+
 beforeAll(async () => {
+  await redis.connect().catch(() => undefined);
   execSync('npx prisma migrate deploy', {
     cwd: apiRoot,
     env: { ...process.env },
@@ -40,8 +47,15 @@ afterEach(async () => {
     prisma.refreshToken.deleteMany(),
     prisma.user.deleteMany(),
   ]);
+
+  if (redis.status === 'ready') {
+    await redis.flushdb();
+  }
 });
 
 afterAll(async () => {
   await prisma.$disconnect();
+  if (redis.status === 'ready') {
+    await redis.quit();
+  }
 });

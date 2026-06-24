@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 
+import { AuthThrottlerGuard } from '../common/guards/auth-throttler.guard';
 import { EnvConfig } from '../config/env.validation';
 import { EmailModule } from '../email/email.module';
 import { AuthController } from './auth.controller';
@@ -23,7 +24,7 @@ import { TokenService } from './token.service';
     EmailModule,
   ],
   controllers: [AuthController],
-  providers: [AuthService, TokenService, JwtStrategy],
+  providers: [AuthService, TokenService, JwtStrategy, AuthThrottlerGuard],
   exports: [AuthService, TokenService],
 })
 export class AuthModule {}

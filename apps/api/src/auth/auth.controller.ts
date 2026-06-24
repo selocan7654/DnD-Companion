@@ -1,5 +1,8 @@
-import { Body, Controller, HttpCode, HttpStatus, Post, Req, Res } from '@nestjs/common';
+import { Body, Controller, HttpCode, HttpStatus, Post, Req, Res, UseGuards } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 
+import { AuthThrottlerGuard } from '../common/guards/auth-throttler.guard';
+import { AUTH_THROTTLE } from '../common/throttle/auth-throttle.constants';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Public } from '../common/decorators/public.decorator';
 import { AuthService } from './auth.service';
@@ -17,6 +20,8 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Public()
+  @UseGuards(AuthThrottlerGuard)
+  @Throttle(AUTH_THROTTLE)
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
   register(@Body() dto: RegisterDto) {
@@ -24,6 +29,8 @@ export class AuthController {
   }
 
   @Public()
+  @UseGuards(AuthThrottlerGuard)
+  @Throttle(AUTH_THROTTLE)
   @Post('login')
   @HttpCode(HttpStatus.OK)
   login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: AuthCookieResponse) {
@@ -59,6 +66,8 @@ export class AuthController {
   }
 
   @Public()
+  @UseGuards(AuthThrottlerGuard)
+  @Throttle(AUTH_THROTTLE)
   @Post('password-reset/request')
   @HttpCode(HttpStatus.OK)
   requestPasswordReset(@Body() dto: PasswordResetRequestDto) {

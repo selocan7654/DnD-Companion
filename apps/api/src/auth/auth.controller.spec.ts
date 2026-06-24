@@ -283,6 +283,105 @@ describe('AuthController (integration)', () => {
     });
   });
 
+  describe('auth rate limiting', () => {
+    it('429 — sixth login attempt within window', async () => {
+      const user = await createTestUser(prisma, {
+        email: 'ratelimit-login@test.local',
+        username: 'ratelimitlogin',
+      });
+
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const res = await request(app.getHttpServer())
+          .post('/api/v1/auth/login')
+          .send({ email: user.email, password: 'WrongPassword1' });
+
+        expect(res.status).toBe(401);
+      }
+
+      const limited = await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ email: user.email, password: 'WrongPassword1' });
+
+      expect(limited.status).toBe(429);
+      expect(limited.body.error).toBe('TOO_MANY_REQUESTS');
+      expect(limited.body.message).toBe('Too many requests. Please try again later.');
+      expect(limited.headers['retry-after']).toBe('900');
+    });
+
+    it('429 — sixth register attempt within window', async () => {
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const res = await request(app.getHttpServer())
+          .post('/api/v1/auth/register')
+          .send({
+            email: `ratelimit-reg-${attempt}@test.local`,
+            username: `ratelimit${attempt}`,
+            password: 'SecurePass123',
+          });
+
+        expect(res.status).toBe(201);
+      }
+
+      const limited = await request(app.getHttpServer()).post('/api/v1/auth/register').send({
+        email: 'ratelimit-reg-5@test.local',
+        username: 'ratelimit5',
+        password: 'SecurePass123',
+      });
+
+      expect(limited.status).toBe(429);
+      expect(limited.body.message).toBe('Too many requests. Please try again later.');
+    });
+
+    it('429 — sixth password-reset request within window', async () => {
+      const user = await createTestUser(prisma, {
+        email: 'ratelimit-reset@test.local',
+        username: 'ratelimitreset',
+      });
+
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const res = await request(app.getHttpServer())
+          .post('/api/v1/auth/password-reset/request')
+          .send({ email: user.email });
+
+        expect(res.status).toBe(200);
+      }
+
+      const limited = await request(app.getHttpServer())
+        .post('/api/v1/auth/password-reset/request')
+        .send({ email: user.email });
+
+      expect(limited.status).toBe(429);
+      expect(limited.body.message).toBe('Too many requests. Please try again later.');
+    });
+  });
+
+  describe('POST /auth/verify-email — single use', () => {
+    it('400 — verification token cannot be reused', async () => {
+      const registerRes = await request(app.getHttpServer()).post('/api/v1/auth/register').send({
+        email: 'singleuse@test.local',
+        username: 'singleuseuser',
+        password: 'SingleUsePass1',
+      });
+
+      expect(registerRes.status).toBe(201);
+
+      const verifyToken = emailService.getVerificationTokenForEmail('singleuse@test.local');
+      expect(verifyToken).toBeDefined();
+
+      const firstVerify = await request(app.getHttpServer())
+        .post('/api/v1/auth/verify-email')
+        .send({ token: verifyToken });
+
+      expect(firstVerify.status).toBe(200);
+
+      const secondVerify = await request(app.getHttpServer())
+        .post('/api/v1/auth/verify-email')
+        .send({ token: verifyToken });
+
+      expect(secondVerify.status).toBe(400);
+      expect(secondVerify.body.error).toBe('INVALID_VERIFICATION_TOKEN');
+    });
+  });
+
   describe('POST /auth/resend-verification', () => {
     it('200 — sends new verification email for unverified user', async () => {
       const registerRes = await request(app.getHttpServer()).post('/api/v1/auth/register').send({

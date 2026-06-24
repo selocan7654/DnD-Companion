@@ -20,6 +20,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { usePageTitle } from '@/hooks/usePageTitle';
 import { getApiErrorMessage, getApiErrorStatus } from '@/lib/api-error';
+import { toast } from '@/hooks/use-toast';
 import { useLoginMutation } from '@/store/api/authApi';
 import { setCredentials } from '@/store/authSlice';
 import { useAppDispatch } from '@/store/hooks';
@@ -57,7 +58,11 @@ export function LoginPage() {
     } catch (error) {
       const status = getApiErrorStatus(error);
       if (status === 429) {
-        setApiError('Too many login attempts. Please try again later.');
+        toast({
+          title: 'Too many requests',
+          description: 'Too many requests. Please try again later.',
+        });
+        setApiError('Too many requests. Please try again later.');
       } else {
         setApiError(getApiErrorMessage(error, 'Invalid email or password'));
       }
