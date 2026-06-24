@@ -6,13 +6,23 @@ import Redis from 'ioredis';
 
 const apiRoot = resolve(__dirname, '..');
 
+function testRedisUrl(): string {
+  if (process.env.TEST_REDIS_URL) {
+    return process.env.TEST_REDIS_URL;
+  }
+
+  // Parallel Jest workers share one Redis instance — isolate throttle keys per worker.
+  const workerId = process.env.JEST_WORKER_ID ?? '1';
+  return `redis://localhost:6379/${workerId}`;
+}
+
 function ensureTestEnv(): void {
   process.env.NODE_ENV = process.env.NODE_ENV ?? 'test';
   process.env.DATABASE_URL =
     process.env.DATABASE_URL ??
     process.env.TEST_DATABASE_URL ??
     'postgresql://dnd_user:dnd_local_pass@localhost:5432/dnd_companion?schema=public';
-  process.env.REDIS_URL = process.env.REDIS_URL ?? 'redis://localhost:6379';
+  process.env.REDIS_URL = testRedisUrl();
   process.env.JWT_ACCESS_SECRET =
     process.env.JWT_ACCESS_SECRET ?? 'test-access-secret-minimum-32-characters';
   process.env.JWT_REFRESH_SECRET =
@@ -26,7 +36,7 @@ ensureTestEnv();
 
 export const prisma = new PrismaClient();
 
-const redis = new Redis(process.env.REDIS_URL ?? 'redis://localhost:6379', {
+const redis = new Redis(testRedisUrl(), {
   maxRetriesPerRequest: 1,
   lazyConnect: true,
 });

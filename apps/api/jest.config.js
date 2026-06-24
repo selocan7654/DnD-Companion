@@ -25,6 +25,8 @@ const config = {
   testEnvironment: 'node',
   setupFilesAfterEnv: ['<rootDir>/test/setup.ts'],
   testTimeout: 30000,
+  // Integration tests share one Postgres schema; parallel workers race on afterEach truncate.
+  maxWorkers: 1,
 };
 
 module.exports = config;
