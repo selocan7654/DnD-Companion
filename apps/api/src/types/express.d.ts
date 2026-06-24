@@ -2,11 +2,7 @@ declare global {
   namespace Express {
     interface Request {
       requestId?: string;
-      user?: {
-        sub: string;
-        role: string;
-        emailVerified: boolean;
-      };
+      user?: import('../auth/interfaces/auth-user.interface').AuthUser;
     }
   }
 }
