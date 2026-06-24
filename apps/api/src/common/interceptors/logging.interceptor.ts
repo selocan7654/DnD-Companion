@@ -3,12 +3,16 @@ import { Request, Response } from 'express';
 import { Observable, tap } from 'rxjs';
 import { v4 as uuidv4 } from 'uuid';
 
+import { AuthUser } from '../../auth/interfaces/auth-user.interface';
+
+type RequestWithUser = Request & { user?: AuthUser };
+
 @Injectable()
 export class LoggingInterceptor implements NestInterceptor {
   private readonly logger = new Logger(LoggingInterceptor.name);
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
-    const req = context.switchToHttp().getRequest<Request>();
+    const req = context.switchToHttp().getRequest<RequestWithUser>();
     const requestId = (req.headers['x-request-id'] as string | undefined) ?? uuidv4();
     req.requestId = requestId;
 
@@ -19,7 +23,7 @@ export class LoggingInterceptor implements NestInterceptor {
       tap(() => {
         const res = context.switchToHttp().getResponse<Response>();
         const duration = Date.now() - start;
-        const userId = req.user?.sub;
+        const userId = req.user?.id;
 
         this.logger.log(
           JSON.stringify({
