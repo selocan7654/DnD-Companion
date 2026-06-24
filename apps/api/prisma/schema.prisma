@@ -12,6 +12,11 @@ enum Role {
   USER
 }
 
+enum CharacterVisibility {
+  PUBLIC
+  PRIVATE
+}
+
 model User {
   id              String    @id @default(uuid())
   email           String    @unique
@@ -24,12 +29,104 @@ model User {
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt @map("updated_at")
 
-  refreshTokens            RefreshToken[]
-  emailVerificationTokens  EmailVerificationToken[]
-  passwordResetTokens      PasswordResetToken[]
+  refreshTokens           RefreshToken[]
+  emailVerificationTokens EmailVerificationToken[]
+  passwordResetTokens     PasswordResetToken[]
+  campaigns               Campaign[]
+  campaignMembers         CampaignMember[]
+  characters              Character[]
 
   @@index([role, isActive])
   @@map("users")
+}
+
+model Campaign {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  bannerUrl   String?  @map("banner_url")
+  setting     String?
+  ownerId     String   @map("owner_id")
+  inviteToken String?  @unique @map("invite_token")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  owner      User             @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  members    CampaignMember[]
+  characters Character[]
+  dmNotes    DmNote[]
+
+  @@index([ownerId], map: "campaigns_owner_id_idx")
+  @@map("campaigns")
+}
+
+model CampaignMember {
+  campaignId String   @map("campaign_id")
+  userId     String   @map("user_id")
+  joinedAt   DateTime @default(now()) @map("joined_at")
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([campaignId, userId])
+  @@index([userId], map: "campaign_members_user_id_idx")
+  @@map("campaign_members")
+}
+
+model Character {
+  id                 String              @id @default(uuid())
+  ownerId            String              @map("owner_id")
+  campaignId         String?             @map("campaign_id")
+  name               String
+  race               String?
+  className          String?             @map("class_name")
+  subclass           String?
+  level              Int                 @default(1)
+  background         String?
+  alignment          String?
+  experiencePoints   Int                 @default(0) @map("experience_points")
+  abilityScores      Json                @default("{\"STR\":10,\"DEX\":10,\"CON\":10,\"INT\":10,\"WIS\":10,\"CHA\":10}") @map("ability_scores")
+  hitPointsMax       Int?                @map("hit_points_max")
+  hitPointsCurrent   Int?                @map("hit_points_current")
+  temporaryHitPoints Int                 @default(0) @map("temporary_hit_points")
+  armorClass         Int?                @map("armor_class")
+  speed              Int?
+  proficiencyBonus   Int?                @map("proficiency_bonus")
+  savingThrows       Json?               @map("saving_throws")
+  skills             Json?
+  featuresAndTraits  Json?               @map("features_and_traits")
+  equipment          Json?
+  spellSlots         Json?               @map("spell_slots")
+  knownSpells        Json?               @map("known_spells")
+  deathSaves         Json                @default("{\"successes\":0,\"failures\":0}") @map("death_saves")
+  conditions         Json                @default("[]")
+  notes              String?
+  portraitUrl        String?             @map("portrait_url")
+  visibility         CharacterVisibility @default(PRIVATE)
+  createdAt          DateTime            @default(now()) @map("created_at")
+  updatedAt          DateTime            @updatedAt @map("updated_at")
+
+  owner    User      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  campaign Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+
+  @@index([ownerId], map: "characters_owner_id_idx")
+  @@index([campaignId], map: "characters_campaign_id_idx")
+  @@map("characters")
+}
+
+model DmNote {
+  id         String   @id @default(uuid())
+  campaignId String   @map("campaign_id")
+  title      String
+  content    String?
+  sortOrder  Int      @default(0) @map("sort_order")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId, sortOrder], map: "dm_notes_campaign_id_sort_idx")
+  @@map("dm_notes")
 }
 
 model EmailVerificationToken {
