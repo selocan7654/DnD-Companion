@@ -10,6 +10,12 @@ const config = {
   collectCoverageFrom: ['src/**/*.ts', '!src/main.ts'],
   coverageDirectory: './coverage',
   coverageThreshold: {
+    './src/common/policies/': {
+      branches: 100,
+      functions: 100,
+      lines: 100,
+      statements: 100,
+    },
     './src/common/guards/': {
       branches: 80,
       functions: 100,

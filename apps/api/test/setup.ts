@@ -52,6 +52,10 @@ beforeAll(async () => {
 
 afterEach(async () => {
   await prisma.$transaction([
+    prisma.dmNote.deleteMany(),
+    prisma.character.deleteMany(),
+    prisma.campaignMember.deleteMany(),
+    prisma.campaign.deleteMany(),
     prisma.passwordResetToken.deleteMany(),
     prisma.emailVerificationToken.deleteMany(),
     prisma.refreshToken.deleteMany(),
