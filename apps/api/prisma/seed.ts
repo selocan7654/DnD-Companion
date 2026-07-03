@@ -19,23 +19,33 @@ async function main() {
   const prisma = new PrismaClient();
   const passwordHash = await argon2.hash(password, ARGON2_OPTIONS);
 
-  await prisma.user.upsert({
-    where: { email },
-    update: {
-      passwordHash,
-      role: Role.ADMIN,
-      isActive: true,
-      emailVerifiedAt: new Date(),
-    },
-    create: {
-      email,
-      username: 'admin',
-      passwordHash,
-      role: Role.ADMIN,
-      isActive: true,
-      emailVerifiedAt: new Date(),
+  const adminData = {
+    email,
+    passwordHash,
+    role: Role.ADMIN,
+    isActive: true,
+    emailVerifiedAt: new Date(),
+  };
+
+  const existingAdmin = await prisma.user.findFirst({
+    where: {
+      OR: [{ email }, { username: 'admin', role: Role.ADMIN }],
     },
   });
+
+  if (existingAdmin) {
+    await prisma.user.update({
+      where: { id: existingAdmin.id },
+      data: adminData,
+    });
+  } else {
+    await prisma.user.create({
+      data: {
+        ...adminData,
+        username: 'admin',
+      },
+    });
+  }
 
   await prisma.$disconnect();
 }
