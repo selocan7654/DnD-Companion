@@ -1,5 +1,5 @@
 import { Link, NavLink } from 'react-router-dom';
-import { LayoutGrid, LogOut, Swords, Users } from 'lucide-react';
+import { BookOpen, LayoutGrid, LogOut, ScrollText, Swords, Users } from 'lucide-react';
 
 import { EmailVerificationBanner } from '@/components/EmailVerificationBanner';
 import { Button } from '@/components/ui/button';
@@ -11,6 +11,8 @@ import { useAppDispatch } from '@/store/hooks';
 const APP_NAV_ITEMS = [
   { to: '/my-campaigns', label: 'My Campaigns', icon: LayoutGrid },
   { to: '/my-characters', label: 'My Characters', icon: Users },
+  { to: '/homebrew', label: 'Homebrew Gallery', icon: BookOpen },
+  { to: '/my-creations', label: 'My Creations', icon: ScrollText },
 ] as const;
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>

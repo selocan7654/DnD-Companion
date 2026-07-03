@@ -21,6 +21,11 @@ import { CampaignListPage } from '@/pages/campaigns/CampaignListPage';
 import { CharacterDetailPage } from '@/pages/characters/CharacterDetailPage';
 import { CharacterEditRedirect } from '@/pages/characters/CharacterEditRedirect';
 import { CharacterListPage } from '@/pages/characters/CharacterListPage';
+import { HomebrewCreatePage } from '@/pages/homebrew/HomebrewCreatePage';
+import { HomebrewDetailPage } from '@/pages/homebrew/HomebrewDetailPage';
+import { HomebrewEditPage } from '@/pages/homebrew/HomebrewEditPage';
+import { HomebrewGalleryPage } from '@/pages/homebrew/HomebrewGalleryPage';
+import { MyCreationsPage } from '@/pages/homebrew/MyCreationsPage';
 import { InvitePage } from '@/pages/invite/InvitePage';
 
 const CharacterBuilderPage = lazy(() =>
@@ -70,6 +75,14 @@ export const router = createBrowserRouter([
         element: <CharacterDetailPage />,
       },
       {
+        path: '/homebrew',
+        element: <HomebrewGalleryPage />,
+      },
+      {
+        path: '/homebrew/:id',
+        element: <HomebrewDetailPage />,
+      },
+      {
         path: '/',
         element: <RootRedirect />,
       },
@@ -87,6 +100,9 @@ export const router = createBrowserRouter([
               { path: '/characters/new', element: <LazyCharacterBuilderPage /> },
               { path: '/characters/:id/builder', element: <LazyCharacterBuilderPage /> },
               { path: '/characters/:id/edit', element: <CharacterEditRedirect /> },
+              { path: '/homebrew/new', element: <HomebrewCreatePage /> },
+              { path: '/homebrew/:id/edit', element: <HomebrewEditPage /> },
+              { path: '/my-creations', element: <MyCreationsPage /> },
             ],
           },
           {

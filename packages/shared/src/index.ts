@@ -6,3 +6,4 @@ export * from './schemas/auth';
 export * from './schemas/campaign';
 export * from './schemas/character';
 export * from './schemas/homebrew';
+export * from './schemas/homebrew-form';

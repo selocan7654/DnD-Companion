@@ -1,5 +1,5 @@
 import { Link, Outlet } from 'react-router-dom';
-import { Swords } from 'lucide-react';
+import { BookOpen, Swords } from 'lucide-react';
 
 interface PublicLayoutProps {
   children?: React.ReactNode;
@@ -18,13 +18,22 @@ export function PublicLayout({ children }: PublicLayoutProps) {
 
       <header className="border-b">
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
-          <Link to="/login" className="flex items-center gap-2 text-lg font-semibold">
+          <Link to="/homebrew" className="flex items-center gap-2 text-lg font-semibold">
             <Swords className="h-5 w-5" aria-hidden="true" />
             DnD Companion
           </Link>
-          <Link to="/login" className="text-sm font-medium text-primary hover:underline">
-            Sign in
-          </Link>
+          <div className="flex items-center gap-4">
+            <Link
+              to="/homebrew"
+              className="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground"
+            >
+              <BookOpen className="h-4 w-4" aria-hidden="true" />
+              Homebrew Gallery
+            </Link>
+            <Link to="/login" className="text-sm font-medium text-primary hover:underline">
+              Sign in
+            </Link>
+          </div>
         </div>
       </header>
 
