@@ -4,12 +4,17 @@ import { ProtectedRoute } from '@/features/auth/ProtectedRoute';
 import { PublicOnlyRoute } from '@/features/auth/PublicOnlyRoute';
 import { AppLayout } from '@/layouts/AppLayout';
 import { AuthLayout } from '@/layouts/AuthLayout';
+import { MinimalLayout } from '@/layouts/MinimalLayout';
 import { LoginPage } from '@/pages/auth/LoginPage';
 import { PasswordResetConfirmPage } from '@/pages/auth/PasswordResetConfirmPage';
 import { PasswordResetRequestPage } from '@/pages/auth/PasswordResetRequestPage';
 import { RegisterPage } from '@/pages/auth/RegisterPage';
 import { VerifyEmailPage } from '@/pages/auth/VerifyEmailPage';
-import { DashboardPage } from '@/pages/DashboardPage';
+import { CampaignCreatePage } from '@/pages/campaigns/CampaignCreatePage';
+import { CampaignDetailPage } from '@/pages/campaigns/CampaignDetailPage';
+import { CampaignEditPage } from '@/pages/campaigns/CampaignEditPage';
+import { CampaignListPage } from '@/pages/campaigns/CampaignListPage';
+import { InvitePage } from '@/pages/invite/InvitePage';
 
 export const router = createBrowserRouter([
   {
@@ -41,12 +46,22 @@ export const router = createBrowserRouter([
     children: [
       {
         element: <AppLayout />,
-        children: [{ path: '/', element: <DashboardPage /> }],
+        children: [
+          { path: '/', element: <Navigate to="/my-campaigns" replace /> },
+          { path: '/my-campaigns', element: <CampaignListPage /> },
+          { path: '/campaigns/new', element: <CampaignCreatePage /> },
+          { path: '/campaigns/:id', element: <CampaignDetailPage /> },
+          { path: '/campaigns/:id/edit', element: <CampaignEditPage /> },
+        ],
+      },
+      {
+        element: <MinimalLayout />,
+        children: [{ path: '/invite/:token', element: <InvitePage /> }],
       },
     ],
   },
   {
     path: '*',
-    element: <Navigate to="/" replace />,
+    element: <Navigate to="/my-campaigns" replace />,
   },
 ]);

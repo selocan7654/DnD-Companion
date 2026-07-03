@@ -18,6 +18,22 @@ export function getApiErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
+export function getApiErrorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== 'object') {
+    return undefined;
+  }
+
+  const fetchError = error as FetchBaseQueryError;
+  if ('data' in fetchError && fetchError.data && typeof fetchError.data === 'object') {
+    const body = fetchError.data as ApiErrorBody;
+    if (typeof body.error === 'string') {
+      return body.error;
+    }
+  }
+
+  return undefined;
+}
+
 export function getApiErrorStatus(error: unknown): number | undefined {
   if (!error || typeof error !== 'object') {
     return undefined;
