@@ -60,7 +60,7 @@ jobs:
           DATABASE_URL: postgresql://test:test@localhost:5432/dnd_companion_test?schema=public
       - name: Run backend tests
         working-directory: apps/api
-        run: pnpm run test -- --ci --coverage
+        run: pnpm exec jest --ci --coverage
         env:
           NODE_ENV: test
           DATABASE_URL: postgresql://test:test@localhost:5432/dnd_companion_test?schema=public
