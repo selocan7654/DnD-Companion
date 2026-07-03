@@ -108,6 +108,15 @@ describe('AuthController (integration)', () => {
   });
 
   describe('POST /auth/login', () => {
+    it('401 — unknown email returns generic message', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ email: 'nobody@test.local', password: 'WrongPassword1' });
+
+      expect(res.status).toBe(401);
+      expect(res.body.message).toBe('Invalid email or password');
+    });
+
     it('401 — wrong password returns generic message', async () => {
       const user = await createTestUser(prisma, {
         email: 'login@test.local',
