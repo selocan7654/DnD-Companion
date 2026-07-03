@@ -1,5 +1,7 @@
+import { lazy, Suspense } from 'react';
 import { createBrowserRouter, Navigate } from 'react-router-dom';
 
+import { LoadingSpinner } from '@/components/LoadingSpinner';
 import { ProtectedRoute } from '@/features/auth/ProtectedRoute';
 import { PublicOnlyRoute } from '@/features/auth/PublicOnlyRoute';
 import { AppLayout } from '@/layouts/AppLayout';
@@ -15,6 +17,20 @@ import { CampaignDetailPage } from '@/pages/campaigns/CampaignDetailPage';
 import { CampaignEditPage } from '@/pages/campaigns/CampaignEditPage';
 import { CampaignListPage } from '@/pages/campaigns/CampaignListPage';
 import { InvitePage } from '@/pages/invite/InvitePage';
+
+const CharacterBuilderPage = lazy(() =>
+  import('@/pages/characters/CharacterBuilderPage').then((module) => ({
+    default: module.CharacterBuilderPage,
+  })),
+);
+
+function LazyCharacterBuilderPage() {
+  return (
+    <Suspense fallback={<LoadingSpinner label="Loading character builder" />}>
+      <CharacterBuilderPage />
+    </Suspense>
+  );
+}
 
 export const router = createBrowserRouter([
   {
@@ -52,6 +68,8 @@ export const router = createBrowserRouter([
           { path: '/campaigns/new', element: <CampaignCreatePage /> },
           { path: '/campaigns/:id', element: <CampaignDetailPage /> },
           { path: '/campaigns/:id/edit', element: <CampaignEditPage /> },
+          { path: '/characters/new', element: <LazyCharacterBuilderPage /> },
+          { path: '/characters/:id/builder', element: <LazyCharacterBuilderPage /> },
         ],
       },
       {

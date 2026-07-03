@@ -87,3 +87,68 @@ export interface CampaignListQuery {
   cursor?: string;
   limit?: number;
 }
+
+export type AbilityScoreKey = 'STR' | 'DEX' | 'CON' | 'INT' | 'WIS' | 'CHA';
+
+export interface AbilityScores {
+  STR: number;
+  DEX: number;
+  CON: number;
+  INT: number;
+  WIS: number;
+  CHA: number;
+}
+
+export interface EquipmentEntry {
+  name: string;
+  quantity: number;
+  equipped?: boolean;
+  notes?: string;
+}
+
+export interface KnownSpellEntry {
+  name: string;
+  level: number;
+  prepared?: boolean;
+}
+
+export interface SpellSlotEntry {
+  max: number;
+  used: number;
+}
+
+export interface Character {
+  id: string;
+  ownerId: string;
+  ownerUsername: string;
+  ownerAvatarUrl: string | null;
+  campaignId: string | null;
+  name: string;
+  race: string | null;
+  className: string | null;
+  subclass: string | null;
+  level: number;
+  background: string | null;
+  alignment: string | null;
+  experiencePoints: number;
+  abilityScores: AbilityScores | null;
+  hitPointsMax: number | null;
+  hitPointsCurrent: number | null;
+  temporaryHitPoints: number | null;
+  armorClass: number | null;
+  speed: number | null;
+  proficiencyBonus: number | null;
+  savingThrows: Partial<Record<AbilityScoreKey, boolean>> | null;
+  skills: Record<string, { proficient: boolean; expertise?: boolean }> | null;
+  featuresAndTraits: Array<{ name: string; description: string; source?: string }> | null;
+  equipment: EquipmentEntry[] | null;
+  spellSlots: Record<string, SpellSlotEntry> | null;
+  knownSpells: KnownSpellEntry[] | null;
+  deathSaves: { successes: number; failures: number } | null;
+  conditions: string[] | null;
+  notes: string | null;
+  portraitUrl: string | null;
+  visibility: 'PUBLIC' | 'PRIVATE';
+  createdAt: string;
+  updatedAt: string;
+}
