@@ -2,8 +2,6 @@ import { useEffect } from 'react';
 import { RouterProvider } from 'react-router-dom';
 
 import { LoadingSpinner } from '@/components/LoadingSpinner';
-import { Toaster } from '@/components/ui/toaster';
-import { SessionExpiredModal } from '@/features/auth/SessionExpiredModal';
 import { useAuth } from '@/hooks/useAuth';
 import { router } from '@/routes';
 import { useRefreshMutation } from '@/store/api/authApi';
@@ -51,8 +49,6 @@ export function App() {
   return (
     <AppBootstrap>
       <RouterProvider router={router} />
-      <SessionExpiredModal />
-      <Toaster />
     </AppBootstrap>
   );
 }

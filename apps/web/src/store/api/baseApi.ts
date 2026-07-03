@@ -9,6 +9,7 @@ import {
 import type { RootState } from '../index';
 import { clearCredentials, setAccessToken, setCredentials, setSessionExpired } from '../authSlice';
 import type { ApiResponse } from '../../types/api';
+import { shouldRefreshAfterUnauthorized } from './reauth-paths';
 
 const baseQuery = fetchBaseQuery({
   baseUrl: '/api/v1',
@@ -27,12 +28,16 @@ const baseQueryWithReauth: BaseQueryFn<string | FetchArgs, unknown, FetchBaseQue
   api,
   extraOptions,
 ) => {
-  const url = typeof args === 'string' ? args : args.url;
-  const isRefreshRequest = url === '/auth/refresh';
-
   let result = await baseQuery(args, api, extraOptions);
 
-  if (result.error?.status === 401 && !isRefreshRequest) {
+  if (result.error?.status === 401) {
+    const state = api.getState() as RootState;
+    const hadSession = !!state.auth.accessToken;
+
+    if (!shouldRefreshAfterUnauthorized(hadSession, args)) {
+      return result;
+    }
+
     const refreshResult = await baseQuery(
       { url: '/auth/refresh', method: 'POST' },
       api,
@@ -41,12 +46,12 @@ const baseQueryWithReauth: BaseQueryFn<string | FetchArgs, unknown, FetchBaseQue
 
     if (refreshResult.data) {
       const refreshData = refreshResult.data as ApiResponse<{ accessToken: string }>;
-      const state = api.getState() as RootState;
+      const refreshedState = api.getState() as RootState;
 
-      if (state.auth.user) {
+      if (refreshedState.auth.user) {
         api.dispatch(
           setCredentials({
-            user: state.auth.user,
+            user: refreshedState.auth.user,
             accessToken: refreshData.data.accessToken,
           }),
         );

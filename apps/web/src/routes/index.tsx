@@ -1,10 +1,12 @@
 import { lazy, Suspense } from 'react';
-import { createBrowserRouter, Navigate } from 'react-router-dom';
+import { createBrowserRouter } from 'react-router-dom';
 
 import { LoadingSpinner } from '@/components/LoadingSpinner';
 import { ProtectedRoute } from '@/features/auth/ProtectedRoute';
 import { PublicOnlyRoute } from '@/features/auth/PublicOnlyRoute';
+import { RootRedirect } from '@/features/auth/RootRedirect';
 import { AppLayout } from '@/layouts/AppLayout';
+import { AppShell } from '@/layouts/AppShell';
 import { AuthLayout } from '@/layouts/AuthLayout';
 import { MinimalLayout } from '@/layouts/MinimalLayout';
 import { LoginPage } from '@/pages/auth/LoginPage';
@@ -37,58 +39,66 @@ function LazyCharacterBuilderPage() {
 
 export const router = createBrowserRouter([
   {
-    element: <PublicOnlyRoute />,
+    element: <AppShell />,
     children: [
       {
+        element: <PublicOnlyRoute />,
+        children: [
+          {
+            element: <AuthLayout />,
+            children: [
+              { path: '/login', element: <LoginPage /> },
+              { path: '/register', element: <RegisterPage /> },
+              { path: '/forgot-password', element: <PasswordResetRequestPage /> },
+              { path: '/reset-password/:token', element: <PasswordResetConfirmPage /> },
+            ],
+          },
+        ],
+      },
+      {
+        path: '/verify-email',
         element: <AuthLayout />,
-        children: [
-          { path: '/login', element: <LoginPage /> },
-          { path: '/register', element: <RegisterPage /> },
-          { path: '/forgot-password', element: <PasswordResetRequestPage /> },
-          { path: '/reset-password/:token', element: <PasswordResetConfirmPage /> },
-        ],
+        children: [{ index: true, element: <VerifyEmailPage /> }],
       },
-    ],
-  },
-  {
-    path: '/verify-email',
-    element: <AuthLayout />,
-    children: [{ index: true, element: <VerifyEmailPage /> }],
-  },
-  {
-    path: '/verify-email/:token',
-    element: <AuthLayout />,
-    children: [{ index: true, element: <VerifyEmailPage /> }],
-  },
-  {
-    path: '/characters/:id',
-    element: <CharacterDetailPage />,
-  },
-  {
-    element: <ProtectedRoute />,
-    children: [
       {
-        element: <AppLayout />,
+        path: '/verify-email/:token',
+        element: <AuthLayout />,
+        children: [{ index: true, element: <VerifyEmailPage /> }],
+      },
+      {
+        path: '/characters/:id',
+        element: <CharacterDetailPage />,
+      },
+      {
+        path: '/',
+        element: <RootRedirect />,
+      },
+      {
+        element: <ProtectedRoute />,
         children: [
-          { path: '/', element: <Navigate to="/my-campaigns" replace /> },
-          { path: '/my-campaigns', element: <CampaignListPage /> },
-          { path: '/campaigns/new', element: <CampaignCreatePage /> },
-          { path: '/campaigns/:id', element: <CampaignDetailPage /> },
-          { path: '/campaigns/:id/edit', element: <CampaignEditPage /> },
-          { path: '/my-characters', element: <CharacterListPage /> },
-          { path: '/characters/new', element: <LazyCharacterBuilderPage /> },
-          { path: '/characters/:id/builder', element: <LazyCharacterBuilderPage /> },
-          { path: '/characters/:id/edit', element: <CharacterEditRedirect /> },
+          {
+            element: <AppLayout />,
+            children: [
+              { path: '/my-campaigns', element: <CampaignListPage /> },
+              { path: '/campaigns/new', element: <CampaignCreatePage /> },
+              { path: '/campaigns/:id', element: <CampaignDetailPage /> },
+              { path: '/campaigns/:id/edit', element: <CampaignEditPage /> },
+              { path: '/my-characters', element: <CharacterListPage /> },
+              { path: '/characters/new', element: <LazyCharacterBuilderPage /> },
+              { path: '/characters/:id/builder', element: <LazyCharacterBuilderPage /> },
+              { path: '/characters/:id/edit', element: <CharacterEditRedirect /> },
+            ],
+          },
+          {
+            element: <MinimalLayout />,
+            children: [{ path: '/invite/:token', element: <InvitePage /> }],
+          },
         ],
       },
       {
-        element: <MinimalLayout />,
-        children: [{ path: '/invite/:token', element: <InvitePage /> }],
+        path: '*',
+        element: <RootRedirect />,
       },
     ],
-  },
-  {
-    path: '*',
-    element: <Navigate to="/my-campaigns" replace />,
   },
 ]);

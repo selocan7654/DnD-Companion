@@ -12,7 +12,7 @@
     "lint": "eslint .",
     "typecheck": "pnpm --filter @dnd-companion/api exec tsc --noEmit && pnpm --filter @dnd-companion/web exec tsc --noEmit && pnpm --filter @dnd-companion/shared exec tsc --noEmit",
     "test": "pnpm --filter @dnd-companion/api test && pnpm --filter @dnd-companion/web test",
-    "build": "pnpm --filter @dnd-companion/web build && pnpm --filter @dnd-companion/api build",
+    "build": "pnpm --filter @dnd-companion/shared build && pnpm --filter @dnd-companion/web build && pnpm --filter @dnd-companion/api build",
     "prepare": "husky"
   },
   "devDependencies": {
