@@ -58,7 +58,9 @@ jobs:
       - run: pnpm --filter @dnd-companion/api exec prisma migrate deploy
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/dnd_companion_test?schema=public
-      - run: pnpm --filter @dnd-companion/api exec jest -- --ci --coverage
+      - name: Run backend tests
+        working-directory: apps/api
+        run: pnpm test -- --ci --coverage
         env:
           NODE_ENV: test
           DATABASE_URL: postgresql://test:test@localhost:5432/dnd_companion_test?schema=public
