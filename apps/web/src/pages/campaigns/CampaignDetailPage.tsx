@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { InviteLinkManager } from '@/features/campaigns/InviteLinkManager';
 import { MemberList } from '@/features/campaigns/MemberList';
+import { CampaignAssignedCharacters } from '@/features/campaigns/CampaignAssignedCharacters';
 import { useAuth } from '@/hooks/useAuth';
 import { usePageTitle } from '@/hooks/usePageTitle';
 import { getApiErrorMessage } from '@/lib/api-error';
@@ -175,15 +176,7 @@ export function CampaignDetailPage() {
           <h2 id="characters-section-heading" className="text-lg font-semibold">
             Assigned Characters ({campaign.assignedCharacterCount ?? 0})
           </h2>
-          {(campaign.assignedCharacterCount ?? 0) === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No characters assigned to this campaign yet.
-            </p>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              Character details will be available from the character pages.
-            </p>
-          )}
+          <CampaignAssignedCharacters campaignId={id} />
         </section>
       </div>
     </div>

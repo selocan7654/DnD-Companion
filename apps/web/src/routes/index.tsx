@@ -16,6 +16,9 @@ import { CampaignCreatePage } from '@/pages/campaigns/CampaignCreatePage';
 import { CampaignDetailPage } from '@/pages/campaigns/CampaignDetailPage';
 import { CampaignEditPage } from '@/pages/campaigns/CampaignEditPage';
 import { CampaignListPage } from '@/pages/campaigns/CampaignListPage';
+import { CharacterDetailPage } from '@/pages/characters/CharacterDetailPage';
+import { CharacterEditRedirect } from '@/pages/characters/CharacterEditRedirect';
+import { CharacterListPage } from '@/pages/characters/CharacterListPage';
 import { InvitePage } from '@/pages/invite/InvitePage';
 
 const CharacterBuilderPage = lazy(() =>
@@ -58,6 +61,10 @@ export const router = createBrowserRouter([
     children: [{ index: true, element: <VerifyEmailPage /> }],
   },
   {
+    path: '/characters/:id',
+    element: <CharacterDetailPage />,
+  },
+  {
     element: <ProtectedRoute />,
     children: [
       {
@@ -68,8 +75,10 @@ export const router = createBrowserRouter([
           { path: '/campaigns/new', element: <CampaignCreatePage /> },
           { path: '/campaigns/:id', element: <CampaignDetailPage /> },
           { path: '/campaigns/:id/edit', element: <CampaignEditPage /> },
+          { path: '/my-characters', element: <CharacterListPage /> },
           { path: '/characters/new', element: <LazyCharacterBuilderPage /> },
           { path: '/characters/:id/builder', element: <LazyCharacterBuilderPage /> },
+          { path: '/characters/:id/edit', element: <CharacterEditRedirect /> },
         ],
       },
       {

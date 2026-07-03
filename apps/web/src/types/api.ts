@@ -88,6 +88,13 @@ export interface CampaignListQuery {
   limit?: number;
 }
 
+export interface CharacterListQuery {
+  search?: string;
+  campaignId?: string;
+  cursor?: string;
+  limit?: number;
+}
+
 export type AbilityScoreKey = 'STR' | 'DEX' | 'CON' | 'INT' | 'WIS' | 'CHA';
 
 export interface AbilityScores {
