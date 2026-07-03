@@ -1,5 +1,5 @@
 import { Link, NavLink } from 'react-router-dom';
-import { LogOut, Swords } from 'lucide-react';
+import { LayoutGrid, LogOut, Swords, Users } from 'lucide-react';
 
 import { EmailVerificationBanner } from '@/components/EmailVerificationBanner';
 import { Button } from '@/components/ui/button';
@@ -8,11 +8,21 @@ import { useLogoutMutation } from '@/store/api/authApi';
 import { clearCredentials } from '@/store/authSlice';
 import { useAppDispatch } from '@/store/hooks';
 
+const APP_NAV_ITEMS = [
+  { to: '/my-campaigns', label: 'My Campaigns', icon: LayoutGrid },
+  { to: '/my-characters', label: 'My Characters', icon: Users },
+] as const;
+
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
   `block rounded-md px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
     isActive
       ? 'bg-primary text-primary-foreground'
       : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+  }`;
+
+const mobileNavLinkClass = ({ isActive }: { isActive: boolean }) =>
+  `flex flex-1 flex-col items-center gap-1 rounded-md px-2 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+    isActive ? 'text-primary' : 'text-muted-foreground hover:text-foreground'
   }`;
 
 interface AppChromeProps {
@@ -59,19 +69,16 @@ export function AppChrome({ children }: AppChromeProps) {
         </div>
       </header>
 
-      <div className="mx-auto flex max-w-6xl gap-8 px-4 py-6">
+      <div className="mx-auto flex max-w-6xl gap-8 px-4 py-6 pb-20 lg:pb-6">
         <nav className="hidden w-48 shrink-0 lg:block" aria-label="Main navigation">
           <ul className="space-y-1">
-            <li>
-              <NavLink to="/my-campaigns" className={navLinkClass}>
-                My Campaigns
-              </NavLink>
-            </li>
-            <li>
-              <NavLink to="/my-characters" className={navLinkClass}>
-                My Characters
-              </NavLink>
-            </li>
+            {APP_NAV_ITEMS.map(({ to, label }) => (
+              <li key={to}>
+                <NavLink to={to} className={navLinkClass}>
+                  {label}
+                </NavLink>
+              </li>
+            ))}
           </ul>
         </nav>
 
@@ -80,6 +87,22 @@ export function AppChrome({ children }: AppChromeProps) {
           {children}
         </main>
       </div>
+
+      <nav
+        className="fixed inset-x-0 bottom-0 z-40 border-t bg-background lg:hidden"
+        aria-label="Main navigation"
+      >
+        <ul className="mx-auto flex max-w-6xl">
+          {APP_NAV_ITEMS.map(({ to, label, icon: Icon }) => (
+            <li key={to} className="flex-1">
+              <NavLink to={to} className={mobileNavLinkClass}>
+                <Icon className="h-5 w-5" aria-hidden="true" />
+                {label}
+              </NavLink>
+            </li>
+          ))}
+        </ul>
+      </nav>
     </div>
   );
 }

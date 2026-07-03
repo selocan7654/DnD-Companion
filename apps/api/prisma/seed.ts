@@ -8,6 +8,52 @@ const ARGON2_OPTIONS: argon2.Options = {
   parallelism: 1,
 };
 
+const DEV_TEST_USERS = [
+  { email: 'player1@test.local', username: 'player1' },
+  { email: 'player2@test.local', username: 'player2' },
+  { email: 'player3@test.local', username: 'player3' },
+  { email: 'dm1@test.local', username: 'dm1' },
+  { email: 'dm2@test.local', username: 'dm2' },
+] as const;
+
+async function upsertUser(
+  prisma: PrismaClient,
+  params: {
+    email: string;
+    username: string;
+    passwordHash: string;
+    role: Role;
+  },
+): Promise<void> {
+  const userData = {
+    email: params.email,
+    passwordHash: params.passwordHash,
+    role: params.role,
+    isActive: true,
+    emailVerifiedAt: new Date(),
+  };
+
+  const existing = await prisma.user.findFirst({
+    where: {
+      OR: [{ email: params.email }, { username: params.username }],
+    },
+  });
+
+  if (existing) {
+    await prisma.user.update({
+      where: { id: existing.id },
+      data: userData,
+    });
+  } else {
+    await prisma.user.create({
+      data: {
+        ...userData,
+        username: params.username,
+      },
+    });
+  }
+}
+
 async function main() {
   const email = process.env.SEED_ADMIN_EMAIL;
   const password = process.env.SEED_ADMIN_PASSWORD;
@@ -17,34 +63,32 @@ async function main() {
   }
 
   const prisma = new PrismaClient();
-  const passwordHash = await argon2.hash(password, ARGON2_OPTIONS);
+  const adminPasswordHash = await argon2.hash(password, ARGON2_OPTIONS);
 
-  const adminData = {
+  await upsertUser(prisma, {
     email,
-    passwordHash,
+    username: 'admin',
+    passwordHash: adminPasswordHash,
     role: Role.ADMIN,
-    isActive: true,
-    emailVerifiedAt: new Date(),
-  };
-
-  const existingAdmin = await prisma.user.findFirst({
-    where: {
-      OR: [{ email }, { username: 'admin', role: Role.ADMIN }],
-    },
   });
 
-  if (existingAdmin) {
-    await prisma.user.update({
-      where: { id: existingAdmin.id },
-      data: adminData,
-    });
-  } else {
-    await prisma.user.create({
-      data: {
-        ...adminData,
-        username: 'admin',
-      },
-    });
+  const seedTestUsers = process.env.SEED_TEST_USERS === 'true';
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  if (seedTestUsers && !isProduction) {
+    const testPassword = process.env.SEED_TEST_USER_PASSWORD ?? 'password123';
+    const testPasswordHash = await argon2.hash(testPassword, ARGON2_OPTIONS);
+
+    for (const user of DEV_TEST_USERS) {
+      await upsertUser(prisma, {
+        email: user.email,
+        username: user.username,
+        passwordHash: testPasswordHash,
+        role: Role.USER,
+      });
+    }
+
+    console.log(`Seeded ${DEV_TEST_USERS.length} development test users`);
   }
 
   await prisma.$disconnect();
