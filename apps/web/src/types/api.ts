@@ -124,6 +124,71 @@ export interface SpellSlotEntry {
   used: number;
 }
 
+export type HomebrewType = 'SPELL' | 'MONSTER' | 'FEAT' | 'BACKGROUND' | 'MAGIC_ITEM' | 'SUBCLASS';
+
+export type HomebrewStatus = 'DRAFT' | 'PUBLISHED';
+
+export type HomebrewSource =
+  | 'PHB'
+  | 'DMG'
+  | 'MM'
+  | 'XGTE'
+  | 'TCOE'
+  | 'FTOD'
+  | 'VRGR'
+  | 'MPMM'
+  | 'SCAG'
+  | 'ERLW'
+  | 'EGW'
+  | 'GGR'
+  | 'SAiS'
+  | 'SatO'
+  | 'AAG'
+  | 'BGG'
+  | 'PAitM'
+  | 'BMT'
+  | 'PHB2024'
+  | 'DMG2024'
+  | 'MM2024'
+  | 'HOMEBREW';
+
+export interface HomebrewListItem {
+  id: string;
+  name: string;
+  type: HomebrewType;
+  source: HomebrewSource;
+  status: HomebrewStatus;
+  description: string | null;
+  imageUrl: string | null;
+  ownerUsername: string | null;
+  createdAt: string;
+}
+
+export interface HomebrewItem extends HomebrewListItem {
+  data: Record<string, unknown>;
+  ownerId: string | null;
+  publishedAt: string | null;
+  updatedAt: string;
+}
+
+export interface HomebrewGalleryQuery {
+  search?: string;
+  type?: HomebrewType;
+  source?: HomebrewSource;
+  sort?: 'name' | 'createdAt';
+  order?: 'asc' | 'desc';
+  cursor?: string;
+  limit?: number;
+}
+
+export interface MyCreationsQuery {
+  search?: string;
+  type?: HomebrewType;
+  status?: HomebrewStatus;
+  cursor?: string;
+  limit?: number;
+}
+
 export interface Character {
   id: string;
   ownerId: string;
