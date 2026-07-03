@@ -4,12 +4,14 @@ import { Reflector } from '@nestjs/core';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { JwtAuthGuard } from './jwt-auth.guard';
 
-function createMockContext(): ExecutionContext {
+function createMockContext(authHeader?: string): ExecutionContext {
   return {
     getHandler: () => ({}),
     getClass: () => ({}),
     switchToHttp: () => ({
-      getRequest: () => ({}),
+      getRequest: () => ({
+        headers: authHeader ? { authorization: authHeader } : {},
+      }),
     }),
   } as unknown as ExecutionContext;
 }
@@ -23,7 +25,7 @@ describe('JwtAuthGuard', () => {
     guard = new JwtAuthGuard(reflector);
   });
 
-  it('allows public endpoints without calling passport', () => {
+  it('allows public endpoints without auth header', () => {
     jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue(true);
     const superSpy = jest.spyOn(Object.getPrototypeOf(JwtAuthGuard.prototype), 'canActivate');
 
@@ -31,6 +33,18 @@ describe('JwtAuthGuard', () => {
 
     expect(result).toBe(true);
     expect(superSpy).not.toHaveBeenCalled();
+    superSpy.mockRestore();
+  });
+
+  it('delegates to passport for public endpoints with auth header', () => {
+    jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue(true);
+    const superSpy = jest
+      .spyOn(Object.getPrototypeOf(JwtAuthGuard.prototype), 'canActivate')
+      .mockReturnValue(true);
+
+    guard.canActivate(createMockContext('Bearer token'));
+
+    expect(superSpy).toHaveBeenCalled();
     superSpy.mockRestore();
   });
 
