@@ -1,11 +1,12 @@
 import { ConfigService } from '@nestjs/config';
 
+import { EnvConfig } from '../config/env.validation';
 import { EmailService } from './email.service';
 
 function createEmailService(env: Record<string, string | number | undefined>): EmailService {
   const configService = {
     get: (key: string) => env[key],
-  } as ConfigService;
+  } as unknown as ConfigService<EnvConfig, true>;
 
   return new EmailService(configService);
 }

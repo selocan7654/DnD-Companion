@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Character, Prisma } from '@prisma/client';
 import { updateCharacterSchema } from '@dnd-companion/shared';
+import type { ZodIssue } from 'zod';
 
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
 import { AlreadyAssignedToCampaignException } from '../common/exceptions/already-assigned-to-campaign.exception';
@@ -125,7 +126,7 @@ export class CharactersService {
       throw new BadRequestException({
         error: 'VALIDATION_ERROR',
         message: 'Invalid character data',
-        details: parsed.error.issues.map((issue) => ({
+        details: parsed.error.issues.map((issue: ZodIssue) => ({
           field: issue.path.join('.'),
           issue: issue.message,
         })),

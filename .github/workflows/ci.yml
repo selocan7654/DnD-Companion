@@ -17,6 +17,7 @@ jobs:
           node-version: 20
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @dnd-companion/shared build
       - run: pnpm --filter @dnd-companion/api exec prisma generate
       - run: pnpm lint
       - run: pnpm typecheck
@@ -54,6 +55,7 @@ jobs:
           node-version: 20
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @dnd-companion/shared build
       - run: pnpm --filter @dnd-companion/api exec prisma generate
       - run: pnpm --filter @dnd-companion/api exec prisma migrate deploy
         env:
@@ -104,6 +106,7 @@ jobs:
           node-version: 20
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @dnd-companion/shared build
       - run: pnpm --filter @dnd-companion/api exec prisma generate
       - run: pnpm --filter @dnd-companion/web build
       - run: pnpm --filter @dnd-companion/api build

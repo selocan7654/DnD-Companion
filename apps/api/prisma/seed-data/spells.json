@@ -1,0 +1,21 @@
+[
+  {
+    "name": "Fireball",
+    "type": "SPELL",
+    "source": "PHB",
+    "description": "A bright streak flashes from your pointing finger to a point you choose within range and then blossoms with a low roar into an explosion of flame.",
+    "data": {
+      "level": 3,
+      "school": "Evocation",
+      "casting_time": "1 action",
+      "range": "150 feet",
+      "components": { "V": true, "S": true, "M": "a tiny ball of bat guano and sulfur" },
+      "duration": "Instantaneous",
+      "concentration": false,
+      "ritual": false,
+      "classes": ["Sorcerer", "Wizard"],
+      "description": "A bright streak flashes from your pointing finger to a point you choose within range and then blossoms with a low roar into an explosion of flame.",
+      "at_higher_levels": "When you cast this spell using a spell slot of 4th level or higher, the damage increases by 1d6 for each slot level above 3rd."
+    }
+  }
+]

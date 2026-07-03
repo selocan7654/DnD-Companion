@@ -21,3 +21,28 @@ export enum HomebrewType {
   SPELL = 'SPELL',
   SUBCLASS = 'SUBCLASS',
 }
+
+export enum Source {
+  PHB = 'PHB',
+  DMG = 'DMG',
+  MM = 'MM',
+  XGTE = 'XGTE',
+  TCOE = 'TCOE',
+  FTOD = 'FTOD',
+  VRGR = 'VRGR',
+  MPMM = 'MPMM',
+  SCAG = 'SCAG',
+  ERLW = 'ERLW',
+  EGW = 'EGW',
+  GGR = 'GGR',
+  SAiS = 'SAiS',
+  SatO = 'SatO',
+  AAG = 'AAG',
+  BGG = 'BGG',
+  PAitM = 'PAitM',
+  BMT = 'BMT',
+  PHB2024 = 'PHB2024',
+  DMG2024 = 'DMG2024',
+  MM2024 = 'MM2024',
+  HOMEBREW = 'HOMEBREW',
+}
