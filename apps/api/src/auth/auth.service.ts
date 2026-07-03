@@ -4,13 +4,16 @@ import {
   ForbiddenException,
   Injectable,
   Logger,
+  NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Role } from '@prisma/client';
 import * as argon2 from 'argon2';
 
 import { generateSecureToken, hashToken } from '../common/utils/token-hash.util';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { EnvConfig } from '../config/env.validation';
 import { EmailService } from '../email/email.service';
 import { AuthCookieResponse } from './interfaces/auth-cookie.interface';
 import { LoginDto } from './dto/login.dto';
@@ -39,6 +42,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly tokenService: TokenService,
     private readonly emailService: EmailService,
+    private readonly configService: ConfigService<EnvConfig, true>,
   ) {}
 
   async register(dto: RegisterDto) {
@@ -180,6 +184,24 @@ export class AuthService {
     return { data: { message: 'Verification email sent' } };
   }
 
+  getDevVerificationToken(email: string) {
+    const token = this.emailService.getVerificationTokenForEmail(email);
+    if (!token) {
+      throw new NotFoundException({
+        error: 'VERIFICATION_TOKEN_NOT_FOUND',
+        message:
+          'No pending verification token for this email. Register or resend verification first.',
+      });
+    }
+
+    return {
+      data: {
+        verifyUrl: this.emailService.buildVerificationUrl(token),
+        token,
+      },
+    };
+  }
+
   async requestPasswordReset(dto: PasswordResetRequestDto) {
     const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
 
@@ -254,10 +276,14 @@ export class AuthService {
     try {
       await this.emailService.sendVerificationEmail(email, plainToken);
     } catch (error) {
-      this.logger.error(
-        'Failed to send verification email',
-        error instanceof Error ? error.message : undefined,
-      );
+      const message = error instanceof Error ? error.message : undefined;
+      this.logger.error('Failed to send verification email', message);
+
+      if (this.configService.get('NODE_ENV', { infer: true }) === 'development') {
+        this.logger.warn(
+          '[DEV] Register succeeded but SMTP failed. Use the verification link logged above or GET /api/v1/auth/dev/verification-token?email=...',
+        );
+      }
     }
   }
 

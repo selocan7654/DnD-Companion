@@ -429,4 +429,14 @@ describe('AuthController (integration)', () => {
       expect(res.status).toBe(401);
     });
   });
+
+  describe('GET /auth/dev/verification-token', () => {
+    it('404 — unavailable outside development', async () => {
+      const res = await request(app.getHttpServer()).get(
+        '/api/v1/auth/dev/verification-token?email=newplayer@test.local',
+      );
+
+      expect(res.status).toBe(404);
+    });
+  });
 });

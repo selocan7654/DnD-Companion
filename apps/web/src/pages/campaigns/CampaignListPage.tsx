@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Loader2, Plus, Search } from 'lucide-react';
 
@@ -23,11 +23,19 @@ export function CampaignListPage() {
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearch(searchInput.trim());
-      setCursor(undefined);
-      setAllCampaigns([]);
     }, 300);
     return () => clearTimeout(timer);
   }, [searchInput]);
+
+  const isInitialDebouncedSearch = useRef(true);
+  useEffect(() => {
+    if (isInitialDebouncedSearch.current) {
+      isInitialDebouncedSearch.current = false;
+      return;
+    }
+    setCursor(undefined);
+    setAllCampaigns([]);
+  }, [debouncedSearch]);
 
   const { data, isLoading, isFetching, isError, refetch } = useGetCampaignsQuery({
     search: debouncedSearch || undefined,

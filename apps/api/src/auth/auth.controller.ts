@@ -1,11 +1,24 @@
-import { Body, Controller, HttpCode, HttpStatus, Post, Req, Res, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Post,
+  Query,
+  Req,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 
 import { AuthThrottlerGuard } from '../common/guards/auth-throttler.guard';
+import { DevelopmentOnlyGuard } from '../common/guards/development-only.guard';
 import { AUTH_THROTTLE } from '../common/throttle/auth-throttle.constants';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Public } from '../common/decorators/public.decorator';
 import { AuthService } from './auth.service';
+import { DevVerificationTokenQueryDto } from './dto/dev-verification-token-query.dto';
 import { LoginDto } from './dto/login.dto';
 import { PasswordResetConfirmDto } from './dto/password-reset-confirm.dto';
 import { PasswordResetRequestDto } from './dto/password-reset-request.dto';
@@ -57,6 +70,13 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   verifyEmail(@Body() dto: VerifyEmailDto) {
     return this.authService.verifyEmail(dto);
+  }
+
+  @Public()
+  @UseGuards(DevelopmentOnlyGuard)
+  @Get('dev/verification-token')
+  getDevVerificationToken(@Query() query: DevVerificationTokenQueryDto) {
+    return this.authService.getDevVerificationToken(query.email);
   }
 
   @Post('resend-verification')

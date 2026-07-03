@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Loader2, Plus, Search } from 'lucide-react';
 
@@ -28,13 +28,26 @@ export function CharacterListPage() {
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearch(searchInput.trim());
-      setCursor(undefined);
-      setAllCharacters([]);
     }, 300);
     return () => clearTimeout(timer);
   }, [searchInput]);
 
+  const isInitialDebouncedSearch = useRef(true);
   useEffect(() => {
+    if (isInitialDebouncedSearch.current) {
+      isInitialDebouncedSearch.current = false;
+      return;
+    }
+    setCursor(undefined);
+    setAllCharacters([]);
+  }, [debouncedSearch]);
+
+  const isInitialCampaignFilter = useRef(true);
+  useEffect(() => {
+    if (isInitialCampaignFilter.current) {
+      isInitialCampaignFilter.current = false;
+      return;
+    }
     setCursor(undefined);
     setAllCharacters([]);
   }, [selectedCampaignId]);
