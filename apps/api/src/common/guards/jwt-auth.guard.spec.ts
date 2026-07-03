@@ -62,4 +62,53 @@ describe('JwtAuthGuard', () => {
     expect(superSpy).toHaveBeenCalled();
     superSpy.mockRestore();
   });
+
+  describe('handleRequest', () => {
+    it('returns null for public route without auth header', () => {
+      jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue(true);
+
+      const result = guard.handleRequest(null, { id: 'user-1' }, null, createMockContext());
+
+      expect(result).toBeNull();
+    });
+
+    it('throws for public route with invalid token', () => {
+      jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue(true);
+
+      expect(() =>
+        guard.handleRequest(null, null, null, createMockContext('Bearer invalid')),
+      ).toThrow();
+    });
+
+    it('returns user for public route with valid token', () => {
+      jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue(true);
+      const user = { id: 'user-1' };
+
+      const result = guard.handleRequest(null, user, null, createMockContext('Bearer valid'));
+
+      expect(result).toBe(user);
+    });
+
+    it('throws for protected route without user', () => {
+      jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue(false);
+
+      expect(() => guard.handleRequest(null, null, null, createMockContext())).toThrow();
+    });
+
+    it('returns user for protected route with valid user', () => {
+      jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue(false);
+      const user = { id: 'user-1' };
+
+      const result = guard.handleRequest(null, user, null, createMockContext('Bearer valid'));
+
+      expect(result).toBe(user);
+    });
+
+    it('rethrows error for protected route', () => {
+      jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue(false);
+      const error = new Error('passport failure');
+
+      expect(() => guard.handleRequest(error, null, null, createMockContext())).toThrow(error);
+    });
+  });
 });

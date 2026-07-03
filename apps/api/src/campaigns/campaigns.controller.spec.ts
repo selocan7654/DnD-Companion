@@ -5,7 +5,7 @@ import request from 'supertest';
 
 import { AppModule } from '../app.module';
 import { GlobalExceptionFilter } from '../common/filters/global-exception.filter';
-import { authHeader, loginAsUser } from '../../test/auth-helper';
+import { authHeader, accessTokenForDeactivatedUser, loginAsUser } from '../../test/auth-helper';
 import { addCampaignMember, createTestCampaign } from '../../test/factories/campaign.factory';
 import { createTestUser, DEFAULT_TEST_PASSWORD } from '../../test/factories/user.factory';
 import { prisma } from '../../test/setup';
@@ -262,11 +262,20 @@ describe('CampaignsController (integration)', () => {
       expect(updatedCharacter?.campaignId).toBeNull();
     });
 
-    it('204 — player leaves campaign', async () => {
+    it('204 — player leaves campaign and unassigns characters', async () => {
       const dm = await createTestUser(prisma, { username: 'dmleave' });
       const player = await createTestUser(prisma, { username: 'playerleave' });
       const campaign = await createTestCampaign(prisma, dm.id);
       await addCampaignMember(prisma, campaign.id, player.id);
+
+      const character = await prisma.character.create({
+        data: {
+          ownerId: player.id,
+          campaignId: campaign.id,
+          name: 'Leaving Hero',
+        },
+      });
+
       const { accessToken } = await loginAsUser(app, player.email, DEFAULT_TEST_PASSWORD);
 
       const res = await request(app.getHttpServer())
@@ -274,6 +283,18 @@ describe('CampaignsController (integration)', () => {
         .set(authHeader(accessToken));
 
       expect(res.status).toBe(204);
+
+      const updatedCharacter = await prisma.character.findUnique({
+        where: { id: character.id },
+      });
+      expect(updatedCharacter?.campaignId).toBeNull();
+
+      const membership = await prisma.campaignMember.findUnique({
+        where: {
+          campaignId_userId: { campaignId: campaign.id, userId: player.id },
+        },
+      });
+      expect(membership).toBeNull();
     });
   });
 
@@ -318,6 +339,139 @@ describe('CampaignsController (integration)', () => {
 
       const deleted = await prisma.campaign.findUnique({ where: { id: campaign.id } });
       expect(deleted).toBeNull();
+    });
+  });
+
+  describe('Authorization matrix', () => {
+    it('401 — guest cannot create campaign', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/campaigns')
+        .send({ name: 'Guest Campaign' });
+
+      expect(res.status).toBe(401);
+    });
+
+    it('401 — deactivated user cannot create campaign', async () => {
+      const user = await createTestUser(prisma, { username: 'deactcreate' });
+      const token = await accessTokenForDeactivatedUser(app, prisma, user);
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/campaigns')
+        .set(authHeader(token))
+        .send({ name: 'Blocked Campaign' });
+
+      expect(res.status).toBe(401);
+    });
+
+    it('401 — guest cannot list campaigns', async () => {
+      const res = await request(app.getHttpServer()).get('/api/v1/campaigns');
+
+      expect(res.status).toBe(401);
+    });
+
+    it('401 — deactivated user cannot list campaigns', async () => {
+      const user = await createTestUser(prisma, { username: 'deactlist' });
+      const token = await accessTokenForDeactivatedUser(app, prisma, user);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/campaigns')
+        .set(authHeader(token));
+
+      expect(res.status).toBe(401);
+    });
+
+    it('401 — guest cannot read campaign', async () => {
+      const dm = await createTestUser(prisma, { username: 'dmguestread' });
+      const campaign = await createTestCampaign(prisma, dm.id);
+
+      const res = await request(app.getHttpServer()).get(`/api/v1/campaigns/${campaign.id}`);
+
+      expect(res.status).toBe(401);
+    });
+
+    it('404 — outsider cannot update campaign', async () => {
+      const dm = await createTestUser(prisma, { username: 'dmoutsiderpatch' });
+      const stranger = await createTestUser(prisma, { username: 'strangerpatch' });
+      const campaign = await createTestCampaign(prisma, dm.id);
+      const { accessToken } = await loginAsUser(app, stranger.email, DEFAULT_TEST_PASSWORD);
+
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/campaigns/${campaign.id}`)
+        .set(authHeader(accessToken))
+        .send({ name: 'Hacked' });
+
+      expect(res.status).toBe(404);
+    });
+
+    it('403 — member cannot delete campaign', async () => {
+      const dm = await createTestUser(prisma, { username: 'dmmemberdel' });
+      const player = await createTestUser(prisma, { username: 'playerdel' });
+      const campaign = await createTestCampaign(prisma, dm.id);
+      await addCampaignMember(prisma, campaign.id, player.id);
+      const { accessToken } = await loginAsUser(app, player.email, DEFAULT_TEST_PASSWORD);
+
+      const res = await request(app.getHttpServer())
+        .delete(`/api/v1/campaigns/${campaign.id}`)
+        .set(authHeader(accessToken));
+
+      expect(res.status).toBe(403);
+    });
+
+    it('404 — outsider cannot delete campaign', async () => {
+      const dm = await createTestUser(prisma, { username: 'dmoutsiderdel' });
+      const stranger = await createTestUser(prisma, { username: 'strangerdel' });
+      const campaign = await createTestCampaign(prisma, dm.id);
+      const { accessToken } = await loginAsUser(app, stranger.email, DEFAULT_TEST_PASSWORD);
+
+      const res = await request(app.getHttpServer())
+        .delete(`/api/v1/campaigns/${campaign.id}`)
+        .set(authHeader(accessToken));
+
+      expect(res.status).toBe(404);
+    });
+
+    it('403 — member cannot regenerate invite', async () => {
+      const dm = await createTestUser(prisma, { username: 'dminvitedeny' });
+      const player = await createTestUser(prisma, { username: 'playerinvitedeny' });
+      const campaign = await createTestCampaign(prisma, dm.id);
+      await addCampaignMember(prisma, campaign.id, player.id);
+      const { accessToken } = await loginAsUser(app, player.email, DEFAULT_TEST_PASSWORD);
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/campaigns/${campaign.id}/invite/regenerate`)
+        .set(authHeader(accessToken));
+
+      expect(res.status).toBe(403);
+    });
+
+    it('403 — member cannot remove another member', async () => {
+      const dm = await createTestUser(prisma, { username: 'dmremoveother' });
+      const player1 = await createTestUser(prisma, { username: 'player1remove' });
+      const player2 = await createTestUser(prisma, { username: 'player2remove' });
+      const campaign = await createTestCampaign(prisma, dm.id);
+      await addCampaignMember(prisma, campaign.id, player1.id);
+      await addCampaignMember(prisma, campaign.id, player2.id);
+      const { accessToken } = await loginAsUser(app, player1.email, DEFAULT_TEST_PASSWORD);
+
+      const res = await request(app.getHttpServer())
+        .delete(`/api/v1/campaigns/${campaign.id}/members/${player2.id}`)
+        .set(authHeader(accessToken));
+
+      expect(res.status).toBe(403);
+    });
+
+    it('401 — deactivated user cannot read campaign', async () => {
+      const dm = await createTestUser(prisma, { username: 'dmdeactread' });
+      const player = await createTestUser(prisma, { username: 'playerdeactread' });
+      const campaign = await createTestCampaign(prisma, dm.id);
+      await addCampaignMember(prisma, campaign.id, player.id);
+      const token = await accessTokenForDeactivatedUser(app, prisma, player);
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/campaigns/${campaign.id}`)
+        .set(authHeader(token));
+
+      expect(res.status).toBe(401);
     });
   });
 });

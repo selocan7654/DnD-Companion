@@ -5,7 +5,7 @@ import request from 'supertest';
 
 import { AppModule } from '../../app.module';
 import { GlobalExceptionFilter } from '../../common/filters/global-exception.filter';
-import { authHeader, loginAsUser } from '../../../test/auth-helper';
+import { authHeader, accessTokenForDeactivatedUser, loginAsUser } from '../../../test/auth-helper';
 import { addCampaignMember, createTestCampaign } from '../../../test/factories/campaign.factory';
 import { createTestUser, DEFAULT_TEST_PASSWORD } from '../../../test/factories/user.factory';
 import { prisma } from '../../../test/setup';
@@ -255,6 +255,51 @@ describe('DmNotesController (integration)', () => {
       expect(res.body.data.map((note: { sortOrder: number }) => note.sortOrder)).toEqual([0, 1, 2]);
     });
 
+    it('400 — reorder rejects foreign noteIds', async () => {
+      const dm = await createTestUser(prisma, { username: 'dmreorderforeign' });
+      const otherDm = await createTestUser(prisma, { username: 'dmothernotes' });
+      const campaign = await createTestCampaign(prisma, dm.id);
+      const otherCampaign = await createTestCampaign(prisma, otherDm.id);
+      const note = await prisma.dmNote.create({
+        data: { campaignId: campaign.id, title: 'Mine', sortOrder: 0 },
+      });
+      const foreignNote = await prisma.dmNote.create({
+        data: { campaignId: otherCampaign.id, title: 'Theirs', sortOrder: 0 },
+      });
+      const { accessToken } = await loginAsUser(app, dm.email, DEFAULT_TEST_PASSWORD);
+
+      const res = await request(app.getHttpServer())
+        .patch(dmNotesPath(campaign.id, '/reorder'))
+        .set(authHeader(accessToken))
+        .send({ noteIds: [foreignNote.id] });
+
+      expect(res.status).toBe(400);
+      expect(res.body.message).toBe('noteIds must contain exactly all notes for this campaign');
+
+      const unchanged = await prisma.dmNote.findUnique({ where: { id: note.id } });
+      expect(unchanged?.sortOrder).toBe(0);
+    });
+
+    it('400 — reorder rejects duplicate noteIds', async () => {
+      const dm = await createTestUser(prisma, { username: 'dmreorderdup' });
+      const campaign = await createTestCampaign(prisma, dm.id);
+      const note1 = await prisma.dmNote.create({
+        data: { campaignId: campaign.id, title: 'First', sortOrder: 0 },
+      });
+      await prisma.dmNote.create({
+        data: { campaignId: campaign.id, title: 'Second', sortOrder: 1 },
+      });
+      const { accessToken } = await loginAsUser(app, dm.email, DEFAULT_TEST_PASSWORD);
+
+      const res = await request(app.getHttpServer())
+        .patch(dmNotesPath(campaign.id, '/reorder'))
+        .set(authHeader(accessToken))
+        .send({ noteIds: [note1.id, note1.id] });
+
+      expect(res.status).toBe(400);
+      expect(res.body.message).toBe('noteIds must contain exactly all notes for this campaign');
+    });
+
     it('400 — reorder rejects incomplete noteIds set', async () => {
       const dm = await createTestUser(prisma, { username: 'dmreorderbad' });
       const campaign = await createTestCampaign(prisma, dm.id);
@@ -338,6 +383,56 @@ describe('DmNotesController (integration)', () => {
         'Gamma',
         'Beta',
       ]);
+    });
+  });
+
+  describe('Authorization matrix', () => {
+    it('401 — guest cannot list dm notes', async () => {
+      const dm = await createTestUser(prisma, { username: 'dmguestnotes' });
+      const campaign = await createTestCampaign(prisma, dm.id);
+
+      const res = await request(app.getHttpServer()).get(dmNotesPath(campaign.id));
+
+      expect(res.status).toBe(401);
+    });
+
+    it('401 — guest cannot create dm note', async () => {
+      const dm = await createTestUser(prisma, { username: 'dmguestnotecreate' });
+      const campaign = await createTestCampaign(prisma, dm.id);
+
+      const res = await request(app.getHttpServer())
+        .post(dmNotesPath(campaign.id))
+        .send({ title: 'Guest Note' });
+
+      expect(res.status).toBe(401);
+    });
+
+    it('401 — deactivated user cannot list dm notes', async () => {
+      const dm = await createTestUser(prisma, { username: 'dmdeactnotes' });
+      const campaign = await createTestCampaign(prisma, dm.id);
+      const token = await accessTokenForDeactivatedUser(app, prisma, dm);
+
+      const res = await request(app.getHttpServer())
+        .get(dmNotesPath(campaign.id))
+        .set(authHeader(token));
+
+      expect(res.status).toBe(401);
+    });
+
+    it('401 — deactivated user cannot reorder dm notes', async () => {
+      const dm = await createTestUser(prisma, { username: 'dmdeactreorder' });
+      const campaign = await createTestCampaign(prisma, dm.id);
+      const note = await prisma.dmNote.create({
+        data: { campaignId: campaign.id, title: 'Note', sortOrder: 0 },
+      });
+      const token = await accessTokenForDeactivatedUser(app, prisma, dm);
+
+      const res = await request(app.getHttpServer())
+        .patch(dmNotesPath(campaign.id, '/reorder'))
+        .set(authHeader(token))
+        .send({ noteIds: [note.id] });
+
+      expect(res.status).toBe(401);
     });
   });
 });

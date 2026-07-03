@@ -6,7 +6,7 @@ import request from 'supertest';
 
 import { AppModule } from '../app.module';
 import { GlobalExceptionFilter } from '../common/filters/global-exception.filter';
-import { authHeader, loginAsUser } from '../../test/auth-helper';
+import { authHeader, accessTokenForDeactivatedUser, loginAsUser } from '../../test/auth-helper';
 import { addCampaignMember, createTestCampaign } from '../../test/factories/campaign.factory';
 import { createTestCharacter } from '../../test/factories/character.factory';
 import { createTestUser, DEFAULT_TEST_PASSWORD } from '../../test/factories/user.factory';
@@ -338,6 +338,107 @@ describe('CharactersController (integration)', () => {
         .set(authHeader(accessToken));
 
       expect(res.status).toBe(204);
+    });
+  });
+
+  describe('Authorization matrix', () => {
+    it('401 — guest cannot create character', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/characters')
+        .send({ name: 'Guest Character' });
+
+      expect(res.status).toBe(401);
+    });
+
+    it('401 — deactivated user cannot create character', async () => {
+      const user = await createTestUser(prisma, { username: 'deactcharcreate' });
+      const token = await accessTokenForDeactivatedUser(app, prisma, user);
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/characters')
+        .set(authHeader(token))
+        .send({ name: 'Blocked Character' });
+
+      expect(res.status).toBe(401);
+    });
+
+    it('404 — guest cannot read PRIVATE character', async () => {
+      const owner = await createTestUser(prisma, { username: 'privateguestowner' });
+      const character = await createTestCharacter(prisma, owner.id, {
+        visibility: CharacterVisibility.PRIVATE,
+      });
+
+      const res = await request(app.getHttpServer()).get(`/api/v1/characters/${character.id}`);
+
+      expect(res.status).toBe(404);
+    });
+
+    it('404 — outsider cannot read campaign-assigned PRIVATE character', async () => {
+      const dm = await createTestUser(prisma, { username: 'dmcharoutsider' });
+      const player = await createTestUser(prisma, { username: 'playercharoutsider' });
+      const stranger = await createTestUser(prisma, { username: 'strangerchar' });
+      const campaign = await createTestCampaign(prisma, dm.id);
+      await addCampaignMember(prisma, campaign.id, player.id);
+      const character = await createTestCharacter(prisma, player.id, {
+        campaignId: campaign.id,
+        visibility: CharacterVisibility.PRIVATE,
+      });
+      const { accessToken } = await loginAsUser(app, stranger.email, DEFAULT_TEST_PASSWORD);
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/characters/${character.id}`)
+        .set(authHeader(accessToken));
+
+      expect(res.status).toBe(404);
+    });
+
+    it('404 — guest cannot read PUBLIC character when owner is deactivated', async () => {
+      const owner = await createTestUser(prisma, { username: 'deactownerchar' });
+      const character = await createTestCharacter(prisma, owner.id, {
+        visibility: CharacterVisibility.PUBLIC,
+      });
+      await prisma.user.update({ where: { id: owner.id }, data: { isActive: false } });
+
+      const res = await request(app.getHttpServer()).get(`/api/v1/characters/${character.id}`);
+
+      expect(res.status).toBe(404);
+    });
+
+    it('401 — guest cannot update character', async () => {
+      const owner = await createTestUser(prisma, { username: 'guestpatchchar' });
+      const character = await createTestCharacter(prisma, owner.id, {
+        visibility: CharacterVisibility.PUBLIC,
+      });
+
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/characters/${character.id}`)
+        .send({ level: 10 });
+
+      expect(res.status).toBe(401);
+    });
+
+    it('401 — guest cannot delete character', async () => {
+      const owner = await createTestUser(prisma, { username: 'guestdelchar' });
+      const character = await createTestCharacter(prisma, owner.id, {
+        visibility: CharacterVisibility.PUBLIC,
+      });
+
+      const res = await request(app.getHttpServer()).delete(`/api/v1/characters/${character.id}`);
+
+      expect(res.status).toBe(401);
+    });
+
+    it('401 — deactivated user cannot update character', async () => {
+      const user = await createTestUser(prisma, { username: 'deactcharpatch' });
+      const character = await createTestCharacter(prisma, user.id);
+      const token = await accessTokenForDeactivatedUser(app, prisma, user);
+
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/characters/${character.id}`)
+        .set(authHeader(token))
+        .send({ level: 2 });
+
+      expect(res.status).toBe(401);
     });
   });
 });
