@@ -56,6 +56,8 @@ afterEach(async () => {
     prisma.character.deleteMany(),
     prisma.campaignMember.deleteMany(),
     prisma.campaign.deleteMany(),
+    prisma.collectionItem.deleteMany(),
+    prisma.homebrewItem.deleteMany(),
     prisma.passwordResetToken.deleteMany(),
     prisma.emailVerificationToken.deleteMany(),
     prisma.refreshToken.deleteMany(),

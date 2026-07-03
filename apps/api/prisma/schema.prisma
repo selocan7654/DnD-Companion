@@ -17,6 +17,45 @@ enum CharacterVisibility {
   PRIVATE
 }
 
+enum HomebrewStatus {
+  DRAFT
+  PUBLISHED
+}
+
+enum HomebrewType {
+  BACKGROUND
+  FEAT
+  MAGIC_ITEM
+  MONSTER
+  SPELL
+  SUBCLASS
+}
+
+enum Source {
+  PHB
+  DMG
+  MM
+  XGTE
+  TCOE
+  FTOD
+  VRGR
+  MPMM
+  SCAG
+  ERLW
+  EGW
+  GGR
+  SAiS
+  SatO
+  AAG
+  BGG
+  PAitM
+  BMT
+  PHB2024
+  DMG2024
+  MM2024
+  HOMEBREW
+}
+
 model User {
   id              String    @id @default(uuid())
   email           String    @unique
@@ -35,6 +74,8 @@ model User {
   campaigns               Campaign[]
   campaignMembers         CampaignMember[]
   characters              Character[]
+  homebrewItems           HomebrewItem[]
+  collectionItems         CollectionItem[]
 
   @@index([role, isActive])
   @@map("users")
@@ -167,4 +208,42 @@ model RefreshToken {
 
   @@index([userId])
   @@map("refresh_tokens")
+}
+
+model HomebrewItem {
+  id          String         @id @default(uuid())
+  name        String
+  type        HomebrewType
+  source      Source
+  ownerId     String?        @map("owner_id")
+  status      HomebrewStatus @default(DRAFT)
+  publishedAt DateTime?      @map("published_at")
+  imageUrl    String?        @map("image_url")
+  description String?
+  data        Json           @default("{}")
+  createdAt   DateTime       @default(now()) @map("created_at")
+  updatedAt   DateTime       @updatedAt @map("updated_at")
+
+  owner       User?            @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  collections CollectionItem[]
+
+  @@unique([name, type, source])
+  @@index([type, status], map: "homebrew_items_type_status_idx")
+  @@index([source], map: "homebrew_items_source_idx")
+  @@index([ownerId], map: "homebrew_items_owner_id_idx")
+  @@index([name], map: "homebrew_items_name_idx")
+  @@map("homebrew_items")
+}
+
+model CollectionItem {
+  userId         String   @map("user_id")
+  homebrewItemId String   @map("homebrew_item_id")
+  addedAt        DateTime @default(now()) @map("added_at")
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  homebrewItem HomebrewItem @relation(fields: [homebrewItemId], references: [id], onDelete: Cascade)
+
+  @@id([userId, homebrewItemId])
+  @@index([homebrewItemId], map: "collection_items_homebrew_item_id_idx")
+  @@map("collection_items")
 }

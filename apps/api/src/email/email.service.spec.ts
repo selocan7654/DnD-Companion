@@ -5,7 +5,7 @@ import { EmailService } from './email.service';
 function createEmailService(env: Record<string, string | number | undefined>): EmailService {
   const configService = {
     get: (key: string) => env[key],
-  } as ConfigService;
+  } as unknown as ConfigService;
 
   return new EmailService(configService);
 }
