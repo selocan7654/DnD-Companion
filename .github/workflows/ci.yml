@@ -12,13 +12,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @dnd-companion/api exec prisma generate
       - run: pnpm lint
       - run: pnpm typecheck
 
@@ -50,17 +49,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @dnd-companion/api exec prisma generate
       - run: pnpm --filter @dnd-companion/api exec prisma migrate deploy
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/dnd_companion_test?schema=public
-      - run: pnpm --filter @dnd-companion/api run test -- --ci --coverage
+      - name: Run backend tests
+        working-directory: apps/api
+        run: pnpm exec jest --ci --coverage
         env:
           NODE_ENV: test
           DATABASE_URL: postgresql://test:test@localhost:5432/dnd_companion_test?schema=public
@@ -74,8 +74,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -88,8 +86,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -103,12 +99,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @dnd-companion/api exec prisma generate
       - run: pnpm --filter @dnd-companion/web build
       - run: pnpm --filter @dnd-companion/api build
