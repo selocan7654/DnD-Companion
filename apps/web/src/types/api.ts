@@ -349,3 +349,101 @@ export interface UpdateDmNoteInput {
   title?: string;
   content?: string;
 }
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  username: string;
+  role: 'ADMIN' | 'USER';
+  avatarUrl: string | null;
+  emailVerifiedAt: string | null;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminUserListQuery {
+  search?: string;
+  role?: 'ADMIN' | 'USER';
+  isActive?: boolean;
+  cursor?: string;
+  limit?: number;
+  sort?: 'createdAt' | 'username' | 'email';
+  order?: 'asc' | 'desc';
+}
+
+export interface AdminCampaignListItem {
+  id: string;
+  name: string;
+  description: string | null;
+  bannerUrl: string | null;
+  setting: string | null;
+  ownerId: string;
+  ownerUsername: string;
+  ownerEmail: string;
+  ownerIsActive: boolean;
+  memberCount: number;
+  characterCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminCampaignListQuery {
+  search?: string;
+  cursor?: string;
+  limit?: number;
+  sort?: 'createdAt' | 'name';
+  order?: 'asc' | 'desc';
+}
+
+export interface AdminCharacterListItem {
+  id: string;
+  name: string;
+  level: number;
+  race: string | null;
+  className: string | null;
+  visibility: 'PUBLIC' | 'PRIVATE';
+  campaignId: string | null;
+  ownerId: string;
+  ownerUsername: string;
+  ownerEmail: string;
+  ownerIsActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminCharacterListQuery {
+  search?: string;
+  cursor?: string;
+  limit?: number;
+  sort?: 'createdAt' | 'name';
+  order?: 'asc' | 'desc';
+}
+
+export interface AdminHomebrewListItem {
+  id: string;
+  name: string;
+  type: HomebrewType;
+  source: HomebrewSource;
+  status: HomebrewStatus;
+  description: string | null;
+  imageUrl: string | null;
+  ownerId: string | null;
+  ownerUsername: string | null;
+  ownerEmail: string | null;
+  ownerIsActive: boolean | null;
+  publishedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminHomebrewListQuery {
+  search?: string;
+  type?: HomebrewType;
+  source?: HomebrewSource;
+  status?: HomebrewStatus;
+  cursor?: string;
+  limit?: number;
+  sort?: 'createdAt' | 'name';
+  order?: 'asc' | 'desc';
+}

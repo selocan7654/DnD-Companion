@@ -84,6 +84,8 @@ export const baseApi = createApi({
     'MyCreations',
     'Collection',
     'DmNote',
+    'AdminUsers',
+    'AdminContent',
   ],
   endpoints: () => ({}),
 });
