@@ -1,3 +1,4 @@
+import { getHomebrewDataSchema, HomebrewType as SharedHomebrewType } from '@dnd-companion/shared';
 import { HomebrewStatus, HomebrewType, Prisma, PrismaClient, Role, Source } from '@prisma/client';
 import * as argon2 from 'argon2';
 import * as fs from 'fs';
@@ -90,9 +91,17 @@ async function upsertUser(
   }
 }
 
-async function seedOfficialContent(prisma: PrismaClient): Promise<number> {
+function isSharedHomebrewType(type: string): type is SharedHomebrewType {
+  return Object.values(SharedHomebrewType).includes(type as SharedHomebrewType);
+}
+
+async function seedOfficialContent(prisma: PrismaClient): Promise<{
+  upserted: number;
+  skipped: number;
+}> {
   const seedDataDir = path.join(__dirname, 'seed-data');
-  let seededCount = 0;
+  let upserted = 0;
+  let skipped = 0;
 
   for (const file of OFFICIAL_SEED_FILES) {
     const filePath = path.join(seedDataDir, `${file}.json`);
@@ -102,6 +111,21 @@ async function seedOfficialContent(prisma: PrismaClient): Promise<number> {
     for (const entry of items) {
       if (!isOfficialSeedItem(entry)) {
         console.warn(`Skipping invalid official seed entry in ${file}.json`, entry);
+        skipped += 1;
+        continue;
+      }
+
+      if (!isSharedHomebrewType(entry.type)) {
+        console.warn(`Skipping ${entry.name}: unknown HomebrewType ${entry.type}`);
+        skipped += 1;
+        continue;
+      }
+
+      const schema = getHomebrewDataSchema(entry.type);
+      const parsed = schema.safeParse(entry.data);
+      if (!parsed.success) {
+        console.warn(`Skipping invalid ${entry.type}: ${entry.name}`, parsed.error.flatten());
+        skipped += 1;
         continue;
       }
 
@@ -115,7 +139,9 @@ async function seedOfficialContent(prisma: PrismaClient): Promise<number> {
         },
         update: {
           description: entry.description ?? null,
-          data: entry.data as Prisma.InputJsonValue,
+          data: parsed.data as Prisma.InputJsonValue,
+          status: HomebrewStatus.PUBLISHED,
+          ownerId: null,
         },
         create: {
           name: entry.name,
@@ -125,15 +151,15 @@ async function seedOfficialContent(prisma: PrismaClient): Promise<number> {
           status: HomebrewStatus.PUBLISHED,
           publishedAt: new Date(),
           description: entry.description ?? null,
-          data: entry.data as Prisma.InputJsonValue,
+          data: parsed.data as Prisma.InputJsonValue,
         },
       });
 
-      seededCount += 1;
+      upserted += 1;
     }
   }
 
-  return seededCount;
+  return { upserted, skipped };
 }
 
 async function main() {
@@ -173,8 +199,8 @@ async function main() {
     console.log(`Seeded ${DEV_TEST_USERS.length} development test users`);
   }
 
-  const officialCount = await seedOfficialContent(prisma);
-  console.log(`Seeded ${officialCount} official homebrew items`);
+  const { upserted, skipped } = await seedOfficialContent(prisma);
+  console.log(`Seeded ${upserted} official homebrew items (${skipped} skipped)`);
 
   await prisma.$disconnect();
 }

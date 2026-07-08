@@ -14,6 +14,7 @@ export default tseslint.config(
       '**/.husky/**',
       'apps/api/jest.config.js',
       'pnpm-lock.yaml',
+      'tmp/**',
     ],
   },
   eslint.configs.recommended,
@@ -36,7 +37,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ['apps/api/**/*.ts', 'packages/shared/**/*.ts'],
+    files: ['apps/api/**/*.ts', 'packages/shared/**/*.ts', 'scripts/**/*.{js,mjs,cjs,ts}'],
     languageOptions: {
       globals: {
         ...globals.node,

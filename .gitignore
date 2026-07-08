@@ -36,3 +36,6 @@ apps/api/prisma/*.db-journal
 *.tsbuildinfo
 .turbo/
 .cache/
+
+# Local scratch (5e source clones used by seed generator)
+tmp/
