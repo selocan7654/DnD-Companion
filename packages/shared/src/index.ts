@@ -8,3 +8,4 @@ export * from './schemas/character';
 export * from './schemas/homebrew';
 export * from './schemas/homebrew-form';
 export * from './schemas/upload';
+export * from './schemas/user';

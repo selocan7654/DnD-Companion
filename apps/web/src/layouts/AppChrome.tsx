@@ -8,6 +8,7 @@ import {
   ScrollText,
   Shield,
   Swords,
+  UserCircle,
   Users,
 } from 'lucide-react';
 
@@ -26,6 +27,7 @@ const APP_NAV_ITEMS = [
   { to: '/homebrew', label: 'Homebrew Gallery', icon: BookOpen },
   { to: '/my-creations', label: 'My Creations', icon: ScrollText },
   { to: '/my-collection', label: 'My Collection', icon: BookMarked },
+  { to: '/profile', label: 'Profile', icon: UserCircle },
 ] as const;
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
@@ -76,7 +78,14 @@ export function AppChrome({ children }: AppChromeProps) {
             DnD Companion
           </Link>
           <div className="flex items-center gap-3">
-            {user ? <span className="text-sm text-muted-foreground">{user.username}</span> : null}
+            {user ? (
+              <Link
+                to="/profile"
+                className="text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {user.username}
+              </Link>
+            ) : null}
             <Button variant="outline" size="sm" onClick={() => void handleLogout()}>
               <LogOut className="h-4 w-4" aria-hidden="true" />
               Log out

@@ -14,6 +14,7 @@ import { CollectionsModule } from './collections/collections.module';
 import { ReferenceModule } from './reference/reference.module';
 import { WebsocketModule } from './websocket/websocket.module';
 import { UploadsModule } from './uploads/uploads.module';
+import { UsersModule } from './users/users.module';
 import { EmailVerifiedGuard } from './common/guards/email-verified.guard';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
@@ -69,6 +70,7 @@ import { HealthModule } from './health/health.module';
     ReferenceModule,
     WebsocketModule,
     UploadsModule,
+    UsersModule,
     AdminModule,
   ],
   providers: [
