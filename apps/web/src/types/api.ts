@@ -299,3 +299,53 @@ export interface Character {
   createdAt: string;
   updatedAt: string;
 }
+
+export interface DeathSaves {
+  successes: number;
+  failures: number;
+}
+
+export interface LiveFieldsUpdate {
+  hitPointsCurrent?: number | null;
+  temporaryHitPoints?: number;
+  deathSaves?: DeathSaves;
+  conditions?: string[];
+}
+
+export interface LiveFieldsResponse {
+  hitPointsCurrent: number | null;
+  temporaryHitPoints: number | null;
+  deathSaves: DeathSaves | null;
+  conditions: string[] | null;
+}
+
+/** Batch format preferred; single field+value also accepted (docs/03 §14). */
+export type LiveUpdatePayload = {
+  characterId: string;
+  characterName: string;
+  updatedBy: string;
+} & (
+  | { fields: LiveFieldsUpdate; field?: never; value?: never }
+  | { field: keyof LiveFieldsUpdate; value: unknown; fields?: never }
+);
+
+export interface DmNote {
+  id: string;
+  campaignId: string;
+  title: string;
+  content: string | null;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateDmNoteInput {
+  title: string;
+  content?: string;
+  sortOrder?: number;
+}
+
+export interface UpdateDmNoteInput {
+  title?: string;
+  content?: string;
+}

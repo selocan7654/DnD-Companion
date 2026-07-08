@@ -8,6 +8,7 @@ import { RootRedirect } from '@/features/auth/RootRedirect';
 import { AppLayout } from '@/layouts/AppLayout';
 import { AppShell } from '@/layouts/AppShell';
 import { AuthLayout } from '@/layouts/AuthLayout';
+import { FullWidthLayout } from '@/layouts/FullWidthLayout';
 import { MinimalLayout } from '@/layouts/MinimalLayout';
 import { LoginPage } from '@/pages/auth/LoginPage';
 import { PasswordResetConfirmPage } from '@/pages/auth/PasswordResetConfirmPage';
@@ -18,6 +19,7 @@ import { CampaignCreatePage } from '@/pages/campaigns/CampaignCreatePage';
 import { CampaignDetailPage } from '@/pages/campaigns/CampaignDetailPage';
 import { CampaignEditPage } from '@/pages/campaigns/CampaignEditPage';
 import { CampaignListPage } from '@/pages/campaigns/CampaignListPage';
+import { DmScreenPage } from '@/pages/campaigns/DmScreenPage';
 import { CharacterDetailPage } from '@/pages/characters/CharacterDetailPage';
 import { CharacterEditRedirect } from '@/pages/characters/CharacterEditRedirect';
 import { CharacterListPage } from '@/pages/characters/CharacterListPage';
@@ -124,6 +126,10 @@ export const router = createBrowserRouter([
           {
             element: <MinimalLayout />,
             children: [{ path: '/invite/:token', element: <InvitePage /> }],
+          },
+          {
+            element: <FullWidthLayout />,
+            children: [{ path: '/campaigns/:id/dm-screen', element: <DmScreenPage /> }],
           },
         ],
       },

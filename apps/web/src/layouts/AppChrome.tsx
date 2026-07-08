@@ -13,6 +13,7 @@ import {
 import { EmailVerificationBanner } from '@/components/EmailVerificationBanner';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/hooks/useAuth';
+import { disconnectSocket } from '@/lib/socket';
 import { useLogoutMutation } from '@/store/api/authApi';
 import { clearCredentials } from '@/store/authSlice';
 import { useAppDispatch } from '@/store/hooks';
@@ -53,6 +54,7 @@ export function AppChrome({ children }: AppChromeProps) {
     } catch {
       // Session may already be invalid — still clear local state.
     } finally {
+      disconnectSocket();
       dispatch(clearCredentials());
     }
   };

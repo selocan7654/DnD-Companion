@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Loader2, Pencil, Trash2 } from 'lucide-react';
+import { Loader2, Monitor, Pencil, Trash2 } from 'lucide-react';
 
 import { LoadingSpinner } from '@/components/LoadingSpinner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -95,6 +95,12 @@ export function CampaignDetailPage() {
         <div className="flex flex-wrap gap-2">
           {isOwner ? (
             <>
+              <Button asChild size="sm">
+                <Link to={`/campaigns/${id}/dm-screen`}>
+                  <Monitor className="h-4 w-4" aria-hidden="true" />
+                  DM Screen
+                </Link>
+              </Button>
               <Button asChild variant="outline" size="sm">
                 <Link to={`/campaigns/${id}/edit`}>
                   <Pencil className="h-4 w-4" aria-hidden="true" />
