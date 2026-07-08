@@ -28,6 +28,7 @@ export function HomebrewCreatePage() {
         name: values.name,
         type: values.type,
         description: values.description,
+        imageUrl: values.imageUrl ?? null,
         data: values.data,
       }).unwrap();
       toast({ title: 'Homebrew created as draft' });

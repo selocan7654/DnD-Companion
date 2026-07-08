@@ -50,7 +50,7 @@ export function CampaignEditPage() {
     );
   }
 
-  const handleSubmit = async (values: CreateCampaignInput) => {
+  const handleSubmit = async (values: CreateCampaignInput & { bannerUrl?: string | null }) => {
     setApiError(null);
     try {
       await updateCampaign({
@@ -59,6 +59,7 @@ export function CampaignEditPage() {
           name: values.name,
           description: values.description || null,
           setting: values.setting || null,
+          bannerUrl: values.bannerUrl ?? null,
         },
       }).unwrap();
       toast({ title: 'Campaign updated' });
@@ -81,6 +82,7 @@ export function CampaignEditPage() {
       </div>
 
       <CampaignForm
+        showBanner
         submitLabel="Save Changes"
         isSubmitting={isSaving}
         apiError={apiError}
@@ -88,6 +90,7 @@ export function CampaignEditPage() {
           name: campaign.name,
           description: campaign.description ?? '',
           setting: campaign.setting ?? '',
+          bannerUrl: campaign.bannerUrl,
         }}
         onSubmit={handleSubmit}
       />

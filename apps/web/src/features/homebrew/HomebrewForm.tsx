@@ -2,7 +2,14 @@ import { useEffect } from 'react';
 import { Loader2 } from 'lucide-react';
 import { useForm, type UseFormReturn } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { HomebrewType, homebrewFormSchema, type HomebrewFormValues } from '@dnd-companion/shared';
+import {
+  HomebrewType,
+  homebrewFormSchema,
+  UploadPurpose,
+  type HomebrewFormValues,
+} from '@dnd-companion/shared';
+
+import { ImageUpload } from '@/components/ImageUpload';
 
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -478,6 +485,7 @@ export function HomebrewForm({
       name: '',
       type: HomebrewType.FEAT,
       description: '',
+      imageUrl: null,
       data: getDefaultHomebrewData(HomebrewType.FEAT),
       ...defaultValues,
     },
@@ -554,6 +562,27 @@ export function HomebrewForm({
               <FormLabel>Description (optional)</FormLabel>
               <FormControl>
                 <Textarea rows={3} placeholder="Short summary for the gallery" {...field} />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        <FormField
+          control={form.control}
+          name="imageUrl"
+          render={({ field }) => (
+            <FormItem>
+              <FormControl>
+                <ImageUpload
+                  purpose={UploadPurpose.HOMEBREW_IMAGE}
+                  label="Gallery image (optional)"
+                  currentUrl={field.value}
+                  previewAlt="Homebrew image preview"
+                  onUploadComplete={(publicUrl) => field.onChange(publicUrl)}
+                  onClear={() => field.onChange(null)}
+                  disabled={isSubmitting}
+                />
               </FormControl>
               <FormMessage />
             </FormItem>

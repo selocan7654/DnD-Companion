@@ -60,6 +60,7 @@ export function HomebrewEditPage() {
         body: {
           name: values.name,
           description: values.description,
+          imageUrl: values.imageUrl ?? null,
           data: values.data,
         },
       }).unwrap();
@@ -88,6 +89,7 @@ export function HomebrewEditPage() {
           name: item.name,
           type: item.type as HomebrewType,
           description: item.description ?? '',
+          imageUrl: item.imageUrl,
           data: item.data,
         }}
         submitLabel="Save Changes"
