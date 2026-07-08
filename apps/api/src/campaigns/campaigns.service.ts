@@ -16,11 +16,13 @@ import { UpdateCampaignDto } from './dto/update-campaign.dto';
 
 type CampaignWithMembers = Campaign & {
   members: Array<{ userId: string }>;
+  owner: { isActive: boolean };
   _count?: { members: number; characters: number };
 };
 
 const campaignInclude = {
   members: { select: { userId: true } },
+  owner: { select: { isActive: true } },
 } satisfies Prisma.CampaignInclude;
 
 @Injectable()
@@ -51,6 +53,7 @@ export class CampaignsService {
 
     const where: Prisma.CampaignWhereInput = {
       OR: [{ ownerId: user.id }, { members: { some: { userId: user.id } } }],
+      owner: { isActive: true },
       ...(search
         ? {
             name: { contains: search, mode: 'insensitive' as const },
@@ -65,9 +68,7 @@ export class CampaignsService {
       where,
       take: limit + 1,
       orderBy: { [sortField]: sortOrder },
-      include: {
-        members: { select: { userId: true } },
-      },
+      include: campaignInclude,
     });
 
     const hasMore = items.length > limit;
@@ -326,7 +327,10 @@ export class CampaignsService {
 
   private async findCampaignByInviteToken(token: string) {
     return this.prisma.campaign.findFirst({
-      where: { inviteToken: token },
+      where: {
+        inviteToken: token,
+        owner: { isActive: true },
+      },
     });
   }
 

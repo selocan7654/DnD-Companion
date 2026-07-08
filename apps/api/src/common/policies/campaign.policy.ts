@@ -5,11 +5,18 @@ import { AuthUser } from '../../auth/interfaces/auth-user.interface';
 export interface CampaignWithMembers {
   ownerId: string;
   members: Array<{ userId: string }>;
+  owner?: { isActive: boolean };
 }
 
 export class CampaignPolicy {
   static canRead(user: AuthUser | null, campaign: CampaignWithMembers): boolean {
     if (user?.role === Role.ADMIN) return true;
+
+    // Deactivated owner content is hidden from non-admins ([AP-002]).
+    if (campaign.owner && !campaign.owner.isActive) {
+      return false;
+    }
+
     if (!user) return false;
     if (campaign.ownerId === user.id) return true;
     return campaign.members.some((m) => m.userId === user.id);

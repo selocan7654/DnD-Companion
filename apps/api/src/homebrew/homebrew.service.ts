@@ -17,11 +17,11 @@ import { HomebrewGalleryQueryDto, MyCreationsQueryDto } from './dto/homebrew-lis
 import { UpdateHomebrewDto } from './dto/update-homebrew.dto';
 
 const homebrewInclude = {
-  owner: { select: { username: true } },
+  owner: { select: { username: true, isActive: true } },
 } satisfies Prisma.HomebrewItemInclude;
 
 type HomebrewLoaded = HomebrewItem & {
-  owner: { username: string } | null;
+  owner: { username: string; isActive: boolean } | null;
 };
 
 @Injectable()
@@ -56,6 +56,8 @@ export class HomebrewService {
 
     const where: Prisma.HomebrewItemWhereInput = {
       status: HomebrewStatus.PUBLISHED,
+      // Official (null owner) stays visible; homebrew requires active owner ([AP-002]).
+      OR: [{ ownerId: null }, { owner: { isActive: true } }],
       ...(query.type ? { type: query.type } : {}),
       ...(query.source ? { source: query.source } : {}),
       ...(search
