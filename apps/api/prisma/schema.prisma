@@ -56,6 +56,21 @@ enum Source {
   HOMEBREW
 }
 
+enum AuditAction {
+  ROLE_CHANGED
+  USER_DEACTIVATED
+  USER_REACTIVATED
+  CONTENT_EDITED
+  CONTENT_DELETED
+}
+
+enum AuditTargetType {
+  USER
+  CAMPAIGN
+  CHARACTER
+  HOMEBREW
+}
+
 model User {
   id              String    @id @default(uuid())
   email           String    @unique
@@ -76,6 +91,7 @@ model User {
   characters              Character[]
   homebrewItems           HomebrewItem[]
   collectionItems         CollectionItem[]
+  auditLogs               AuditLog[]
 
   @@index([role, isActive])
   @@map("users")
@@ -246,4 +262,21 @@ model CollectionItem {
   @@id([userId, homebrewItemId])
   @@index([homebrewItemId], map: "collection_items_homebrew_item_id_idx")
   @@map("collection_items")
+}
+
+model AuditLog {
+  id         String          @id @default(uuid())
+  actorId    String          @map("actor_id")
+  action     AuditAction
+  targetType AuditTargetType @map("target_type")
+  targetId   String          @map("target_id")
+  metadata   Json?
+  createdAt  DateTime        @default(now()) @map("created_at")
+
+  actor User @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([actorId])
+  @@index([targetType, targetId])
+  @@index([createdAt(sort: Desc)])
+  @@map("audit_logs")
 }

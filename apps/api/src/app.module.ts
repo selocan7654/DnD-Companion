@@ -6,6 +6,7 @@ import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis'
 import { LoggerModule } from 'nestjs-pino';
 
 import { AuthModule } from './auth/auth.module';
+import { AdminModule } from './admin/admin.module';
 import { CampaignsModule } from './campaigns/campaigns.module';
 import { CharactersModule } from './characters/characters.module';
 import { HomebrewModule } from './homebrew/homebrew.module';
@@ -14,6 +15,7 @@ import { ReferenceModule } from './reference/reference.module';
 import { WebsocketModule } from './websocket/websocket.module';
 import { EmailVerifiedGuard } from './common/guards/email-verified.guard';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
+import { RolesGuard } from './common/guards/roles.guard';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 import {
@@ -65,6 +67,7 @@ import { HealthModule } from './health/health.module';
     CollectionsModule,
     ReferenceModule,
     WebsocketModule,
+    AdminModule,
   ],
   providers: [
     {
@@ -78,6 +81,10 @@ import { HealthModule } from './health/health.module';
     {
       provide: APP_GUARD,
       useClass: EmailVerifiedGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: RolesGuard,
     },
   ],
 })
