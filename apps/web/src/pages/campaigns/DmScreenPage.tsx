@@ -82,7 +82,7 @@ export function DmScreenPage() {
     isError: charactersError,
   } = useGetCharactersQuery({ campaignId: id!, limit: 50 }, { skip: !id || !isDm });
 
-  const { isConnected } = useWebSocket(isDm ? id : undefined);
+  const { isConnected, reconnectAttempt } = useWebSocket(isDm ? id : undefined);
 
   usePageTitle(campaign ? `DM Screen — ${campaign.name}` : 'DM Screen — DnD Companion');
 
@@ -140,7 +140,7 @@ export function DmScreenPage() {
         <span className="text-sm text-muted-foreground">DM Screen</span>
       </div>
 
-      <ConnectionBanner isConnected={isConnected} />
+      <ConnectionBanner isConnected={isConnected} reconnectAttempt={reconnectAttempt} />
 
       {/* Desktop / tablet: two columns (md+) */}
       <div className="hidden gap-6 md:grid md:grid-cols-[2fr_1fr]">

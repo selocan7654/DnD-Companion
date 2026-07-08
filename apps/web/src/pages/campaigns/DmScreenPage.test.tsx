@@ -76,7 +76,7 @@ function renderPage(userId: string) {
 
 describe('DmScreenPage', () => {
   beforeEach(() => {
-    mockUseWebSocket.mockReturnValue({ isConnected: true });
+    mockUseWebSocket.mockReturnValue({ isConnected: true, reconnectAttempt: 0 });
     mockUseGetDmNotesQuery.mockReturnValue({
       data: { data: [] },
       isLoading: false,
@@ -141,7 +141,7 @@ describe('DmScreenPage', () => {
   });
 
   it('shows reconnect banner when socket disconnected', () => {
-    mockUseWebSocket.mockReturnValue({ isConnected: false });
+    mockUseWebSocket.mockReturnValue({ isConnected: false, reconnectAttempt: 2 });
     mockUseGetCampaignQuery.mockReturnValue({
       data: {
         data: {
@@ -163,7 +163,8 @@ describe('DmScreenPage', () => {
     renderPage('dm-1');
 
     expect(screen.getByRole('status')).toHaveTextContent(
-      'Live updates disconnected. Reconnecting...',
+      /Live updates disconnected\. Reconnecting/,
     );
+    expect(screen.getByRole('status')).toHaveTextContent('Retry #2');
   });
 });

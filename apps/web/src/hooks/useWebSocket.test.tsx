@@ -12,6 +12,8 @@ import type { Character } from '@/types/api';
 
 const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
 
+const managerListeners = new Map<string, Set<(...args: unknown[]) => void>>();
+
 const mockSocket = {
   connected: false,
   auth: { token: '' } as { token: string },
@@ -25,6 +27,15 @@ const mockSocket = {
   emit: vi.fn(),
   connect: vi.fn(),
   disconnect: vi.fn(),
+  io: {
+    on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+      if (!managerListeners.has(event)) managerListeners.set(event, new Set());
+      managerListeners.get(event)!.add(handler);
+    }),
+    off: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+      managerListeners.get(event)?.delete(handler);
+    }),
+  },
 };
 
 vi.mock('@/lib/socket', () => ({
@@ -40,6 +51,10 @@ vi.mock('@/lib/socket', () => ({
 
 function emit(event: string, ...args: unknown[]) {
   listeners.get(event)?.forEach((handler) => handler(...args));
+}
+
+function emitManager(event: string, ...args: unknown[]) {
+  managerListeners.get(event)?.forEach((handler) => handler(...args));
 }
 
 function createStore() {
@@ -106,10 +121,13 @@ const characterFixture: Character = {
 describe('useWebSocket', () => {
   beforeEach(() => {
     listeners.clear();
+    managerListeners.clear();
     mockSocket.connected = false;
     mockSocket.on.mockClear();
     mockSocket.off.mockClear();
     mockSocket.emit.mockClear();
+    mockSocket.io.on.mockClear();
+    mockSocket.io.off.mockClear();
   });
 
   it('joins campaign on connect and patches character list on live-update', async () => {
@@ -181,5 +199,33 @@ describe('useWebSocket', () => {
     });
 
     await waitFor(() => expect(result.current.isConnected).toBe(false));
+  });
+
+  it('tracks reconnectAttempt from manager reconnect_attempt', async () => {
+    const store = createStore();
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <Provider store={store}>{children}</Provider>
+    );
+
+    const { result } = renderHook(() => useWebSocket('camp-1'), { wrapper });
+
+    act(() => {
+      emitManager('reconnect_attempt', 3);
+    });
+
+    await waitFor(() => {
+      expect(result.current.isConnected).toBe(false);
+      expect(result.current.reconnectAttempt).toBe(3);
+    });
+
+    act(() => {
+      mockSocket.connected = true;
+      emit('connect');
+    });
+
+    await waitFor(() => {
+      expect(result.current.isConnected).toBe(true);
+      expect(result.current.reconnectAttempt).toBe(0);
+    });
   });
 });
