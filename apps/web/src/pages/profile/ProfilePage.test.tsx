@@ -21,6 +21,7 @@ const verifiedUser = {
 const mockUseGetMeQuery = vi.fn();
 const mockUseUpdateProfileMutation = vi.fn();
 const mockUseChangePasswordMutation = vi.fn();
+const mockUseDeactivateAccountMutation = vi.fn();
 
 vi.mock('@/store/api/usersApi', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/store/api/usersApi')>();
@@ -29,6 +30,7 @@ vi.mock('@/store/api/usersApi', async (importOriginal) => {
     useGetMeQuery: (...args: unknown[]) => mockUseGetMeQuery(...args),
     useUpdateProfileMutation: (...args: unknown[]) => mockUseUpdateProfileMutation(...args),
     useChangePasswordMutation: (...args: unknown[]) => mockUseChangePasswordMutation(...args),
+    useDeactivateAccountMutation: (...args: unknown[]) => mockUseDeactivateAccountMutation(...args),
   };
 });
 
@@ -81,6 +83,7 @@ describe('ProfilePage', () => {
     });
     mockUseUpdateProfileMutation.mockReturnValue([vi.fn(), { isLoading: false }]);
     mockUseChangePasswordMutation.mockReturnValue([vi.fn(), { isLoading: false }]);
+    mockUseDeactivateAccountMutation.mockReturnValue([vi.fn(), { isLoading: false }]);
   });
 
   it('shows English validation error when new password is shorter than 8 characters', async () => {
@@ -119,5 +122,25 @@ describe('ProfilePage', () => {
     await user.click(screen.getByRole('button', { name: 'Change Password' }));
 
     expect(await screen.findByText('Passwords do not match')).toBeInTheDocument();
+  });
+
+  it('opens deactivate confirmation dialog with English copy', async () => {
+    const user = userEvent.setup();
+    renderProfilePage();
+
+    await screen.findByRole('heading', { name: 'My Profile' });
+
+    await user.click(screen.getByRole('button', { name: 'Deactivate Account' }));
+
+    expect(
+      await screen.findByRole('dialog', { name: 'Deactivate your account?' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'This will log you out and prevent future login. Your content will be hidden. Are you sure?',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Deactivate' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
   });
 });

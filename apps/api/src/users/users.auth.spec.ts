@@ -8,6 +8,7 @@ import { AppModule } from '../app.module';
 import { GlobalExceptionFilter } from '../common/filters/global-exception.filter';
 import { authHeader, loginAsUser } from '../../test/auth-helper';
 import { createTestUser, DEFAULT_TEST_PASSWORD } from '../../test/factories/user.factory';
+import { addCampaignMember, createTestCampaign } from '../../test/factories/campaign.factory';
 import { prisma } from '../../test/setup';
 
 describe('Users auth matrix (integration)', () => {
@@ -239,6 +240,162 @@ describe('Users auth matrix (integration)', () => {
         .send({ username: 'adminself_updated' });
       expect(patchRes.status).toBe(200);
       expect(patchRes.body.data.username).toBe('adminself_updated');
+    });
+  });
+
+  describe('POST /users/me/deactivate', () => {
+    it('204 — authenticated user deactivates self and revokes refresh tokens', async () => {
+      const user = await createTestUser(prisma, {
+        username: 'selfdeact',
+        emailVerifiedAt: new Date(),
+      });
+      const { accessToken } = await loginAsUser(app, user.email, DEFAULT_TEST_PASSWORD);
+
+      await prisma.refreshToken.create({
+        data: {
+          userId: user.id,
+          tokenHash: 'self-deact-refresh-hash',
+          expiresAt: new Date(Date.now() + 86400000),
+        },
+      });
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/users/me/deactivate')
+        .set(authHeader(accessToken));
+
+      expect(res.status).toBe(204);
+
+      const updated = await prisma.user.findUnique({ where: { id: user.id } });
+      expect(updated?.isActive).toBe(false);
+
+      const revoked = await prisma.refreshToken.findMany({
+        where: { userId: user.id, isRevoked: true },
+      });
+      expect(revoked.length).toBeGreaterThan(0);
+    });
+
+    it('204 — ADMIN can deactivate own account', async () => {
+      const admin = await createTestUser(prisma, {
+        username: 'adminselfdeact',
+        role: Role.ADMIN,
+        emailVerifiedAt: new Date(),
+      });
+      const { accessToken } = await loginAsUser(app, admin.email, DEFAULT_TEST_PASSWORD);
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/users/me/deactivate')
+        .set(authHeader(accessToken));
+
+      expect(res.status).toBe(204);
+
+      const updated = await prisma.user.findUnique({ where: { id: admin.id } });
+      expect(updated?.isActive).toBe(false);
+    });
+
+    it('401 — guest cannot deactivate', async () => {
+      const res = await request(app.getHttpServer()).post('/api/v1/users/me/deactivate');
+
+      expect(res.status).toBe(401);
+    });
+  });
+
+  describe('self-service deactivation side effects (§5.5.2)', () => {
+    it('403 — login rejected after self-deactivation', async () => {
+      const user = await createTestUser(prisma, {
+        username: 'deactlogin',
+        emailVerifiedAt: new Date(),
+      });
+      const { accessToken } = await loginAsUser(app, user.email, DEFAULT_TEST_PASSWORD);
+
+      const deactivateRes = await request(app.getHttpServer())
+        .post('/api/v1/users/me/deactivate')
+        .set(authHeader(accessToken));
+      expect(deactivateRes.status).toBe(204);
+
+      const loginRes = await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ email: user.email, password: DEFAULT_TEST_PASSWORD });
+
+      expect(loginRes.status).toBe(403);
+      expect(loginRes.body.error).toBe('ACCOUNT_DEACTIVATED');
+    });
+
+    it('401 — refresh rejected after self-deactivation', async () => {
+      const user = await createTestUser(prisma, {
+        username: 'deactrefresh',
+        emailVerifiedAt: new Date(),
+      });
+      const { accessToken, refreshCookie } = await loginAsUser(
+        app,
+        user.email,
+        DEFAULT_TEST_PASSWORD,
+      );
+
+      const deactivateRes = await request(app.getHttpServer())
+        .post('/api/v1/users/me/deactivate')
+        .set(authHeader(accessToken));
+      expect(deactivateRes.status).toBe(204);
+
+      const refreshRes = await request(app.getHttpServer())
+        .post('/api/v1/auth/refresh')
+        .set('Cookie', refreshCookie);
+
+      expect(refreshRes.status).toBe(401);
+    });
+
+    it('401 — GET /users/me rejected with access token after deactivation', async () => {
+      const user = await createTestUser(prisma, {
+        username: 'deactme',
+        emailVerifiedAt: new Date(),
+      });
+      const { accessToken } = await loginAsUser(app, user.email, DEFAULT_TEST_PASSWORD);
+
+      const deactivateRes = await request(app.getHttpServer())
+        .post('/api/v1/users/me/deactivate')
+        .set(authHeader(accessToken));
+      expect(deactivateRes.status).toBe(204);
+
+      const meRes = await request(app.getHttpServer())
+        .get('/api/v1/users/me')
+        .set(authHeader(accessToken));
+
+      expect(meRes.status).toBe(401);
+    });
+  });
+
+  describe('deactivated owner content hiding after self-service (§5.5.1)', () => {
+    it('404 — campaign member cannot read campaign when owner self-deactivates', async () => {
+      const owner = await createTestUser(prisma, {
+        username: 'selfdeactowner',
+        emailVerifiedAt: new Date(),
+      });
+      const member = await createTestUser(prisma, {
+        username: 'selfdeactmember',
+        emailVerifiedAt: new Date(),
+      });
+      const campaign = await createTestCampaign(prisma, owner.id);
+      await addCampaignMember(prisma, campaign.id, member.id);
+
+      const { accessToken: ownerToken } = await loginAsUser(
+        app,
+        owner.email,
+        DEFAULT_TEST_PASSWORD,
+      );
+      const deactivateRes = await request(app.getHttpServer())
+        .post('/api/v1/users/me/deactivate')
+        .set(authHeader(ownerToken));
+      expect(deactivateRes.status).toBe(204);
+
+      const { accessToken: memberToken } = await loginAsUser(
+        app,
+        member.email,
+        DEFAULT_TEST_PASSWORD,
+      );
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/campaigns/${campaign.id}`)
+        .set(authHeader(memberToken));
+
+      expect(res.status).toBe(404);
     });
   });
 });

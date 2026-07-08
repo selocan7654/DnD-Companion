@@ -7,6 +7,7 @@ import {
   Param,
   ParseUUIDPipe,
   Patch,
+  Post,
 } from '@nestjs/common';
 
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
@@ -37,6 +38,12 @@ export class UsersController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async changePassword(@CurrentUser() user: AuthUser, @Body() dto: ChangePasswordDto) {
     await this.usersService.changePassword(user.id, dto);
+  }
+
+  @Post('me/deactivate')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async deactivateSelf(@CurrentUser() user: AuthUser) {
+    await this.usersService.deactivateSelf(user.id);
   }
 
   @Get(':id')

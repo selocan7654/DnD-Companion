@@ -40,6 +40,12 @@ export const usersApi = baseApi.injectEndpoints({
         body,
       }),
     }),
+    deactivateAccount: builder.mutation<void, void>({
+      query: () => ({
+        url: '/users/me/deactivate',
+        method: 'POST',
+      }),
+    }),
     getPublicUser: builder.query<ApiResponse<PublicUserProfile>, string>({
       query: (id) => `/users/${id}`,
     }),
@@ -50,5 +56,6 @@ export const {
   useGetMeQuery,
   useUpdateProfileMutation,
   useChangePasswordMutation,
+  useDeactivateAccountMutation,
   useGetPublicUserQuery,
 } = usersApi;

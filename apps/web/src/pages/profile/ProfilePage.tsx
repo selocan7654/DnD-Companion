@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { CheckCircle2, Loader2 } from 'lucide-react';
 import { useForm } from 'react-hook-form';
+import { useNavigate } from 'react-router-dom';
 import { UploadPurpose } from '@dnd-companion/shared';
 
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { ImageUpload } from '@/components/ImageUpload';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -22,13 +24,16 @@ import { useAuth } from '@/hooks/useAuth';
 import { usePageTitle } from '@/hooks/usePageTitle';
 import { toast } from '@/hooks/use-toast';
 import { getApiErrorMessage } from '@/lib/api-error';
+import { disconnectSocket } from '@/lib/socket';
 import { useResendVerificationMutation } from '@/store/api/authApi';
+import { baseApi } from '@/store/api/baseApi';
 import {
   useChangePasswordMutation,
+  useDeactivateAccountMutation,
   useGetMeQuery,
   useUpdateProfileMutation,
 } from '@/store/api/usersApi';
-import { updateUser } from '@/store/authSlice';
+import { clearCredentials, updateUser } from '@/store/authSlice';
 import { useAppDispatch } from '@/store/hooks';
 
 import {
@@ -43,15 +48,18 @@ export function ProfilePage() {
   usePageTitle('My Profile — DnD Companion');
 
   const dispatch = useAppDispatch();
+  const navigate = useNavigate();
   const { isEmailVerified } = useAuth();
   const { data, isLoading, isError } = useGetMeQuery();
   const [updateProfile, { isLoading: isSavingProfile }] = useUpdateProfileMutation();
   const [changePassword, { isLoading: isChangingPassword }] = useChangePasswordMutation();
+  const [deactivateAccount, { isLoading: isDeactivating }] = useDeactivateAccountMutation();
   const [resendVerification, { isLoading: isResending }] = useResendVerificationMutation();
 
   const [profileApiError, setProfileApiError] = useState<string | null>(null);
   const [passwordApiError, setPasswordApiError] = useState<string | null>(null);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [showDeactivateDialog, setShowDeactivateDialog] = useState(false);
 
   const profile = data?.data;
 
@@ -146,6 +154,22 @@ export function ProfilePage() {
         title: 'Failed to send verification email',
         description: getApiErrorMessage(error, 'Please try again later'),
       });
+    }
+  };
+
+  const handleDeactivateConfirm = async () => {
+    try {
+      await deactivateAccount().unwrap();
+      disconnectSocket();
+      dispatch(clearCredentials());
+      dispatch(baseApi.util.resetApiState());
+      navigate('/login', { replace: true });
+    } catch (error) {
+      toast({
+        title: 'Failed to deactivate account',
+        description: getApiErrorMessage(error, 'Please try again later'),
+      });
+      setShowDeactivateDialog(false);
     }
   };
 
@@ -369,6 +393,43 @@ export function ProfilePage() {
           </Form>
         </CardContent>
       </Card>
+
+      <Card className="border-destructive/50">
+        <CardHeader>
+          <CardTitle className="text-destructive">Danger Zone</CardTitle>
+          <CardDescription>Irreversible actions for your account.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <p className="mb-4 text-sm text-muted-foreground">
+            Deactivating your account will sign you out and prevent future login. Your content will
+            be hidden from other users.
+          </p>
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={() => setShowDeactivateDialog(true)}
+            disabled={isDeactivating}
+            aria-busy={isDeactivating}
+          >
+            Deactivate Account
+          </Button>
+        </CardContent>
+      </Card>
+
+      <ConfirmDialog
+        open={showDeactivateDialog}
+        title="Deactivate your account?"
+        description="This will log you out and prevent future login. Your content will be hidden. Are you sure?"
+        confirmLabel="Deactivate"
+        variant="destructive"
+        isPending={isDeactivating}
+        onConfirm={() => void handleDeactivateConfirm()}
+        onCancel={() => {
+          if (!isDeactivating) {
+            setShowDeactivateDialog(false);
+          }
+        }}
+      />
     </div>
   );
 }
