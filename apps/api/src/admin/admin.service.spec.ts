@@ -123,5 +123,71 @@ describe('AdminService', () => {
         ConflictException,
       );
     });
+
+    it('deactivates user, revokes refresh tokens, and writes USER_DEACTIVATED audit', async () => {
+      const target = {
+        id: 'user-1',
+        role: Role.USER,
+        isActive: true,
+        email: 'user@test.local',
+        username: 'player',
+        avatarUrl: null,
+        emailVerifiedAt: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      prisma.user.findUnique.mockResolvedValue(target);
+      prisma.user.update.mockResolvedValue({ ...target, isActive: false });
+      prisma.refreshToken.updateMany.mockResolvedValue({ count: 2 });
+      prisma.auditLog.create.mockResolvedValue({});
+
+      const result = await service.deactivateUser('actor-1', 'user-1');
+
+      expect(result.data.isActive).toBe(false);
+      expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { userId: 'user-1', isRevoked: false },
+          data: { isRevoked: true },
+        }),
+      );
+      expect(prisma.auditLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            action: AuditAction.USER_DEACTIVATED,
+            targetId: 'user-1',
+            metadata: {
+              targetEmail: target.email,
+              targetUsername: target.username,
+            },
+          }),
+        }),
+      );
+    });
+
+    it('allows deactivating an admin when another active admin remains', async () => {
+      const target = {
+        id: 'admin-2',
+        role: Role.ADMIN,
+        isActive: true,
+        email: 'admin2@test.local',
+        username: 'admin2',
+        avatarUrl: null,
+        emailVerifiedAt: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      prisma.user.findUnique.mockResolvedValue(target);
+      prisma.user.count.mockResolvedValue(2);
+      prisma.user.update.mockResolvedValue({ ...target, isActive: false });
+      prisma.refreshToken.updateMany.mockResolvedValue({ count: 1 });
+      prisma.auditLog.create.mockResolvedValue({});
+
+      const result = await service.deactivateUser('actor-1', 'admin-2');
+
+      expect(result.data.isActive).toBe(false);
+      expect(prisma.user.count).toHaveBeenCalledWith({
+        where: { role: Role.ADMIN, isActive: true },
+      });
+    });
   });
 });

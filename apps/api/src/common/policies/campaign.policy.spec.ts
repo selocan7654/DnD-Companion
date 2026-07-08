@@ -19,6 +19,7 @@ function makeUser(overrides: Partial<AuthUser> = {}): AuthUser {
 const campaign = {
   ownerId: 'owner-1',
   members: [{ userId: 'member-1' }],
+  owner: { isActive: true },
 };
 
 describe('CampaignPolicy', () => {
@@ -45,6 +46,27 @@ describe('CampaignPolicy', () => {
     it('denies outsider', () => {
       const stranger = makeUser({ id: 'stranger-1' });
       expect(CampaignPolicy.canRead(stranger, campaign)).toBe(false);
+    });
+
+    it('denies member when owner is deactivated', () => {
+      const deactivatedOwnerCampaign = {
+        ...campaign,
+        owner: { isActive: false },
+      };
+      const member = makeUser({ id: 'member-1' });
+      expect(CampaignPolicy.canRead(member, deactivatedOwnerCampaign)).toBe(false);
+      expect(CampaignPolicy.canRead(makeUser({ id: 'stranger-1' }), deactivatedOwnerCampaign)).toBe(
+        false,
+      );
+    });
+
+    it('allows ADMIN to read when owner is deactivated', () => {
+      const deactivatedOwnerCampaign = {
+        ...campaign,
+        owner: { isActive: false },
+      };
+      const admin = makeUser({ id: 'admin-1', role: Role.ADMIN });
+      expect(CampaignPolicy.canRead(admin, deactivatedOwnerCampaign)).toBe(true);
     });
   });
 

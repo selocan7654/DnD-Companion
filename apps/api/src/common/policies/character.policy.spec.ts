@@ -90,6 +90,22 @@ describe('CharacterPolicy', () => {
       expect(
         CharacterPolicy.canRead(makeUser({ id: 'stranger-1' }), deactivatedOwnerCharacter),
       ).toBe(false);
+      expect(
+        CharacterPolicy.canRead(makeUser({ id: 'member-1' }), {
+          ...assignedCharacter,
+          owner: inactiveOwner,
+        }),
+      ).toBe(false);
+    });
+
+    it('allows ADMIN to read when owner is deactivated', () => {
+      const admin = makeUser({ id: 'admin-1', role: Role.ADMIN });
+      expect(
+        CharacterPolicy.canRead(admin, {
+          ...publicCharacter,
+          owner: inactiveOwner,
+        }),
+      ).toBe(true);
     });
   });
 

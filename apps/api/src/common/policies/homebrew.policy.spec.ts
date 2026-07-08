@@ -20,18 +20,21 @@ const draftHomebrew = {
   ownerId: 'owner-1',
   source: Source.HOMEBREW,
   status: HomebrewStatus.DRAFT,
+  owner: { isActive: true },
 };
 
 const publishedHomebrew = {
   ownerId: 'owner-1',
   source: Source.HOMEBREW,
   status: HomebrewStatus.PUBLISHED,
+  owner: { isActive: true },
 };
 
 const officialItem = {
   ownerId: null,
   source: Source.PHB,
   status: HomebrewStatus.PUBLISHED,
+  owner: null,
 };
 
 describe('HomebrewPolicy', () => {
@@ -58,6 +61,31 @@ describe('HomebrewPolicy', () => {
 
     it('denies guest from reading DRAFT', () => {
       expect(HomebrewPolicy.canRead(null, draftHomebrew)).toBe(false);
+    });
+
+    it('denies read when owner is deactivated', () => {
+      const deactivatedOwnerItem = {
+        ...publishedHomebrew,
+        owner: { isActive: false },
+      };
+      expect(HomebrewPolicy.canRead(null, deactivatedOwnerItem)).toBe(false);
+      expect(HomebrewPolicy.canRead(makeUser({ id: 'stranger-1' }), deactivatedOwnerItem)).toBe(
+        false,
+      );
+    });
+
+    it('allows ADMIN to read when owner is deactivated', () => {
+      const admin = makeUser({ id: 'admin-1', role: Role.ADMIN });
+      expect(
+        HomebrewPolicy.canRead(admin, {
+          ...publishedHomebrew,
+          owner: { isActive: false },
+        }),
+      ).toBe(true);
+    });
+
+    it('allows official content with null owner', () => {
+      expect(HomebrewPolicy.canRead(null, officialItem)).toBe(true);
     });
   });
 
