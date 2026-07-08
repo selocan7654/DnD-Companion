@@ -1,5 +1,21 @@
 import { io, type Socket } from 'socket.io-client';
 
+/**
+ * Socket.io exponential reconnect (docs/05 §14):
+ * 1s → 2s → 4s → 8s … capped at 30s (Manager doubles delay each attempt).
+ */
+export const SOCKET_RECONNECT = {
+  delay: 1000,
+  delayMax: 30_000,
+  randomizationFactor: 0.5,
+} as const;
+
+/** Predicted wait before the next attempt (pre-jitter), for UI copy. */
+export function getReconnectDelayMs(attempt: number): number {
+  if (attempt < 1) return SOCKET_RECONNECT.delay;
+  return Math.min(SOCKET_RECONNECT.delay * 2 ** (attempt - 1), SOCKET_RECONNECT.delayMax);
+}
+
 let socket: Socket | null = null;
 
 /**
@@ -29,8 +45,9 @@ export function connectSocket(accessToken: string): Socket {
     transports: ['websocket'],
     reconnection: true,
     reconnectionAttempts: Infinity,
-    reconnectionDelay: 1000,
-    reconnectionDelayMax: 30000,
+    reconnectionDelay: SOCKET_RECONNECT.delay,
+    reconnectionDelayMax: SOCKET_RECONNECT.delayMax,
+    randomizationFactor: SOCKET_RECONNECT.randomizationFactor,
   });
 
   return socket;

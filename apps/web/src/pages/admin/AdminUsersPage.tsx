@@ -6,7 +6,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { getApiErrorMessage } from '@/lib/api-error';
+import { getApiErrorCode, getApiErrorMessage } from '@/lib/api-error';
 import { toast } from '@/hooks/use-toast';
 import { usePageTitle } from '@/hooks/usePageTitle';
 import {
@@ -101,8 +101,9 @@ export function AdminUsersPage() {
       setCursor(undefined);
       setAllUsers([]);
     } catch (error) {
+      const isLastAdmin = getApiErrorCode(error) === 'LAST_ADMIN';
       toast({
-        title: 'Action failed',
+        title: isLastAdmin ? 'Cannot change last admin' : 'Action failed',
         description: getApiErrorMessage(error, 'Failed to update user'),
       });
     }
@@ -204,7 +205,16 @@ export function AdminUsersPage() {
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" aria-hidden="true" />
         </div>
       ) : allUsers.length === 0 ? (
-        <p className="text-muted-foreground">No users found.</p>
+        <div
+          className="rounded-lg border border-dashed p-10 text-center"
+          role="status"
+          aria-live="polite"
+        >
+          <p className="text-lg font-medium">No users found</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Try clearing search or filters to see more accounts.
+          </p>
+        </div>
       ) : (
         <>
           <div className="hidden overflow-x-auto md:block">

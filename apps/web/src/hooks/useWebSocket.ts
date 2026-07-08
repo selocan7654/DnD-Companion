@@ -48,14 +48,17 @@ function patchCharacterListCaches(
 
 export function useWebSocket(campaignId: string | undefined): {
   isConnected: boolean;
+  reconnectAttempt: number;
 } {
   const { accessToken } = useAuth();
   const dispatch = useAppDispatch();
   const [isConnected, setIsConnected] = useState(false);
+  const [reconnectAttempt, setReconnectAttempt] = useState(0);
 
   useEffect(() => {
     if (!campaignId || !accessToken) {
       setIsConnected(false);
+      setReconnectAttempt(0);
       return;
     }
 
@@ -63,11 +66,17 @@ export function useWebSocket(campaignId: string | undefined): {
 
     const handleConnect = () => {
       setIsConnected(true);
+      setReconnectAttempt(0);
       socket.emit('join-campaign', { campaignId });
     };
 
     const handleDisconnect = () => {
       setIsConnected(false);
+    };
+
+    const handleReconnectAttempt = (attempt: number) => {
+      setIsConnected(false);
+      setReconnectAttempt(attempt);
     };
 
     const handleLiveUpdate = (data: LiveUpdatePayload) => {
@@ -84,6 +93,7 @@ export function useWebSocket(campaignId: string | undefined): {
 
     socket.on('connect', handleConnect);
     socket.on('disconnect', handleDisconnect);
+    socket.io.on('reconnect_attempt', handleReconnectAttempt);
     socket.on('character:live-update', handleLiveUpdate);
     socket.on('campaign:member-joined', handleMemberJoined);
     socket.on('campaign:member-left', handleMemberLeft);
@@ -98,11 +108,11 @@ export function useWebSocket(campaignId: string | undefined): {
       socket.emit('leave-campaign', { campaignId });
       socket.off('connect', handleConnect);
       socket.off('disconnect', handleDisconnect);
+      socket.io.off('reconnect_attempt', handleReconnectAttempt);
       socket.off('character:live-update', handleLiveUpdate);
       socket.off('campaign:member-joined', handleMemberJoined);
       socket.off('campaign:member-left', handleMemberLeft);
-      // Keep singleton socket for token reuse; disconnect only when leaving DM Screen session
-      // if no other listeners — disconnect fully on unmount of this screen.
+      // Disconnect fully on unmount of this screen.
       disconnectSocket();
     };
   }, [campaignId, accessToken, dispatch]);
@@ -115,7 +125,7 @@ export function useWebSocket(campaignId: string | undefined): {
     socket.auth = { token: accessToken };
   }, [accessToken, campaignId]);
 
-  return { isConnected };
+  return { isConnected, reconnectAttempt };
 }
 
 export type { LiveFieldsUpdate };

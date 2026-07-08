@@ -8,8 +8,15 @@ describe('ConnectionBanner', () => {
     render(<ConnectionBanner isConnected={false} />);
 
     expect(screen.getByRole('status')).toHaveTextContent(
-      'Live updates disconnected. Reconnecting...',
+      /Live updates disconnected\. Reconnecting/,
     );
+  });
+
+  it('shows retry estimate when reconnectAttempt is set', () => {
+    render(<ConnectionBanner isConnected={false} reconnectAttempt={3} />);
+
+    expect(screen.getByRole('status')).toHaveTextContent('Retry #3');
+    expect(screen.getByRole('status')).toHaveTextContent('~4s');
   });
 
   it('renders nothing when connected', () => {
