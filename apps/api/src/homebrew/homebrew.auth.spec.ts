@@ -272,6 +272,22 @@ describe('Homebrew auth matrix (integration)', () => {
       expect(res.status).toBe(200);
     });
 
+    it('200 — ADMIN reads other user draft', async () => {
+      const owner = await createTestUser(prisma, { username: 'draftadminowner' });
+      const item = await createTestHomebrew(prisma, owner.id, {
+        name: 'Admin Visible Draft',
+        status: HomebrewStatus.DRAFT,
+      });
+      const { accessToken } = await loginAdmin();
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/homebrew/${item.id}`)
+        .set(authHeader(accessToken));
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.name).toBe('Admin Visible Draft');
+    });
+
     it('404 — otherUser cannot read draft', async () => {
       const owner = await createTestUser(prisma, { username: 'draftowner2' });
       const item = await createTestHomebrew(prisma, owner.id, {
