@@ -3,6 +3,21 @@ export enum Role {
   USER = 'USER',
 }
 
+export enum AuditAction {
+  ROLE_CHANGED = 'ROLE_CHANGED',
+  USER_DEACTIVATED = 'USER_DEACTIVATED',
+  USER_REACTIVATED = 'USER_REACTIVATED',
+  CONTENT_EDITED = 'CONTENT_EDITED',
+  CONTENT_DELETED = 'CONTENT_DELETED',
+}
+
+export enum AuditTargetType {
+  USER = 'USER',
+  CAMPAIGN = 'CAMPAIGN',
+  CHARACTER = 'CHARACTER',
+  HOMEBREW = 'HOMEBREW',
+}
+
 export enum CharacterVisibility {
   PUBLIC = 'PUBLIC',
   PRIVATE = 'PRIVATE',

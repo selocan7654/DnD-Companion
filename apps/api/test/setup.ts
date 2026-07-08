@@ -52,6 +52,7 @@ beforeAll(async () => {
 
 afterEach(async () => {
   await prisma.$transaction([
+    prisma.auditLog.deleteMany(),
     prisma.dmNote.deleteMany(),
     prisma.character.deleteMany(),
     prisma.campaignMember.deleteMany(),
