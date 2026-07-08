@@ -120,6 +120,33 @@ describe('CharacterPolicy', () => {
     });
   });
 
+  describe('canUpdateLiveFields', () => {
+    it('allows ADMIN bypass', () => {
+      const admin = makeUser({ id: 'admin-1', role: Role.ADMIN });
+      expect(CharacterPolicy.canUpdateLiveFields(admin, assignedCharacter)).toBe(true);
+    });
+
+    it('allows owner', () => {
+      const owner = makeUser({ id: 'owner-1' });
+      expect(CharacterPolicy.canUpdateLiveFields(owner, assignedCharacter)).toBe(true);
+    });
+
+    it('allows campaign DM', () => {
+      const dm = makeUser({ id: 'dm-1' });
+      expect(CharacterPolicy.canUpdateLiveFields(dm, assignedCharacter)).toBe(true);
+    });
+
+    it('denies campaign member', () => {
+      const member = makeUser({ id: 'member-1' });
+      expect(CharacterPolicy.canUpdateLiveFields(member, assignedCharacter)).toBe(false);
+    });
+
+    it('denies outsider', () => {
+      const stranger = makeUser({ id: 'stranger-1' });
+      expect(CharacterPolicy.canUpdateLiveFields(stranger, assignedCharacter)).toBe(false);
+    });
+  });
+
   describe('canDelete', () => {
     it('mirrors canUpdate for owner', () => {
       const owner = makeUser({ id: 'owner-1' });

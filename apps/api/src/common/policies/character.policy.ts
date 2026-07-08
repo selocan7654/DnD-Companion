@@ -38,6 +38,14 @@ export class CharacterPolicy {
     return false;
   }
 
+  /** Owner or campaign DM may update live fields (HP, conditions, death saves). */
+  static canUpdateLiveFields(user: AuthUser, character: CharacterWithRelations): boolean {
+    if (user.role === Role.ADMIN) return true;
+    if (character.ownerId === user.id) return true;
+    if (character.campaignId && character.campaign?.ownerId === user.id) return true;
+    return false;
+  }
+
   static canDelete(user: AuthUser, character: CharacterWithRelations): boolean {
     return CharacterPolicy.canUpdate(user, character);
   }

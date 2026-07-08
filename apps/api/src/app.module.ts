@@ -11,6 +11,7 @@ import { CharactersModule } from './characters/characters.module';
 import { HomebrewModule } from './homebrew/homebrew.module';
 import { CollectionsModule } from './collections/collections.module';
 import { ReferenceModule } from './reference/reference.module';
+import { WebsocketModule } from './websocket/websocket.module';
 import { EmailVerifiedGuard } from './common/guards/email-verified.guard';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
@@ -63,6 +64,7 @@ import { HealthModule } from './health/health.module';
     HomebrewModule,
     CollectionsModule,
     ReferenceModule,
+    WebsocketModule,
   ],
   providers: [
     {
