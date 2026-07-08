@@ -10,7 +10,10 @@ export function getApiErrorMessage(error: unknown, fallback: string): string {
   const fetchError = error as FetchBaseQueryError;
   if ('data' in fetchError && fetchError.data && typeof fetchError.data === 'object') {
     const body = fetchError.data as ApiErrorBody;
-    if (typeof body.message === 'string') {
+    if (body.error === 'LAST_ADMIN') {
+      return body.message || 'Cannot remove the last admin from the system';
+    }
+    if (typeof body.message === 'string' && body.message.length > 0) {
       return body.message;
     }
   }

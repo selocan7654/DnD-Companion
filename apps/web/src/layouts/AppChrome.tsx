@@ -6,6 +6,7 @@ import {
   LayoutGrid,
   LogOut,
   ScrollText,
+  Shield,
   Swords,
   Users,
 } from 'lucide-react';
@@ -44,7 +45,7 @@ interface AppChromeProps {
 }
 
 export function AppChrome({ children }: AppChromeProps) {
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
   const dispatch = useAppDispatch();
   const [logout] = useLogoutMutation();
 
@@ -94,6 +95,16 @@ export function AppChrome({ children }: AppChromeProps) {
                 </NavLink>
               </li>
             ))}
+            {isAdmin ? (
+              <li>
+                <NavLink to="/admin/users" className={navLinkClass}>
+                  <span className="inline-flex items-center gap-2">
+                    <Shield className="h-4 w-4" aria-hidden="true" />
+                    Admin Panel
+                  </span>
+                </NavLink>
+              </li>
+            ) : null}
           </ul>
         </nav>
 

@@ -2,9 +2,11 @@ import { lazy, Suspense } from 'react';
 import { createBrowserRouter, Navigate } from 'react-router-dom';
 
 import { LoadingSpinner } from '@/components/LoadingSpinner';
+import { AdminRoute } from '@/features/auth/AdminRoute';
 import { ProtectedRoute } from '@/features/auth/ProtectedRoute';
 import { PublicOnlyRoute } from '@/features/auth/PublicOnlyRoute';
 import { RootRedirect } from '@/features/auth/RootRedirect';
+import { AdminLayout } from '@/layouts/AdminLayout';
 import { AppLayout } from '@/layouts/AppLayout';
 import { AppShell } from '@/layouts/AppShell';
 import { AuthLayout } from '@/layouts/AuthLayout';
@@ -38,6 +40,34 @@ const CharacterBuilderPage = lazy(() =>
     default: module.CharacterBuilderPage,
   })),
 );
+
+const AdminUsersPage = lazy(() =>
+  import('@/pages/admin/AdminUsersPage').then((module) => ({
+    default: module.AdminUsersPage,
+  })),
+);
+
+const AdminCampaignsPage = lazy(() =>
+  import('@/pages/admin/AdminCampaignsPage').then((module) => ({
+    default: module.AdminCampaignsPage,
+  })),
+);
+
+const AdminCharactersPage = lazy(() =>
+  import('@/pages/admin/AdminCharactersPage').then((module) => ({
+    default: module.AdminCharactersPage,
+  })),
+);
+
+const AdminHomebrewPage = lazy(() =>
+  import('@/pages/admin/AdminHomebrewPage').then((module) => ({
+    default: module.AdminHomebrewPage,
+  })),
+);
+
+function LazyAdminPage({ children }: { children: React.ReactNode }) {
+  return <Suspense fallback={<LoadingSpinner label="Loading admin" />}>{children}</Suspense>;
+}
 
 function LazyCharacterBuilderPage() {
   return (
@@ -130,6 +160,49 @@ export const router = createBrowserRouter([
           {
             element: <FullWidthLayout />,
             children: [{ path: '/campaigns/:id/dm-screen', element: <DmScreenPage /> }],
+          },
+          {
+            element: <AdminRoute />,
+            children: [
+              {
+                element: <AdminLayout />,
+                children: [
+                  {
+                    path: '/admin/users',
+                    element: (
+                      <LazyAdminPage>
+                        <AdminUsersPage />
+                      </LazyAdminPage>
+                    ),
+                  },
+                  {
+                    path: '/admin/campaigns',
+                    element: (
+                      <LazyAdminPage>
+                        <AdminCampaignsPage />
+                      </LazyAdminPage>
+                    ),
+                  },
+                  {
+                    path: '/admin/characters',
+                    element: (
+                      <LazyAdminPage>
+                        <AdminCharactersPage />
+                      </LazyAdminPage>
+                    ),
+                  },
+                  {
+                    path: '/admin/homebrew',
+                    element: (
+                      <LazyAdminPage>
+                        <AdminHomebrewPage />
+                      </LazyAdminPage>
+                    ),
+                  },
+                  { path: '/admin', element: <Navigate to="/admin/users" replace /> },
+                ],
+              },
+            ],
           },
         ],
       },
