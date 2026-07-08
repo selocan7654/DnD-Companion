@@ -183,7 +183,13 @@ export function CharacterBuilderPage() {
             <AbilityScoresTab form={form} />
           </TabsContent>
           <TabsContent value="background">
-            <BackgroundTab form={form} />
+            <BackgroundTab
+              form={form}
+              portraitUrl={data?.data.portraitUrl}
+              portraitDisabled={!characterId || saveStatus === 'saving'}
+              onPortraitUploaded={(publicUrl) => triggerSave({ portraitUrl: publicUrl })}
+              onPortraitClear={() => triggerSave({ portraitUrl: null })}
+            />
           </TabsContent>
           <TabsContent value="equipment">
             <EquipmentTab form={form} />

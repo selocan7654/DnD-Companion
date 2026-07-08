@@ -1,8 +1,15 @@
 import { Loader2 } from 'lucide-react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { createCampaignSchema, type CreateCampaignInput } from '@dnd-companion/shared';
+import {
+  createCampaignSchema,
+  UploadPurpose,
+  type CreateCampaignInput,
+  updateCampaignSchema,
+} from '@dnd-companion/shared';
 import type { z } from 'zod';
+
+import { ImageUpload } from '@/components/ImageUpload';
 
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -17,14 +24,21 @@ import {
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 
-type CampaignFormValues = z.infer<typeof createCampaignSchema>;
+type CampaignFormValues = z.infer<typeof createCampaignSchema> & {
+  bannerUrl?: string | null;
+};
+
+const campaignFormWithBannerSchema = createCampaignSchema.extend({
+  bannerUrl: updateCampaignSchema.shape.bannerUrl,
+});
 
 interface CampaignFormProps {
   defaultValues?: Partial<CampaignFormValues>;
   submitLabel: string;
   isSubmitting?: boolean;
   apiError?: string | null;
-  onSubmit: (values: CreateCampaignInput) => void | Promise<void>;
+  showBanner?: boolean;
+  onSubmit: (values: CreateCampaignInput & { bannerUrl?: string | null }) => void | Promise<void>;
 }
 
 export function CampaignForm({
@@ -32,14 +46,16 @@ export function CampaignForm({
   submitLabel,
   isSubmitting = false,
   apiError,
+  showBanner = false,
   onSubmit,
 }: CampaignFormProps) {
   const form = useForm<CampaignFormValues>({
-    resolver: zodResolver(createCampaignSchema),
+    resolver: zodResolver(showBanner ? campaignFormWithBannerSchema : createCampaignSchema),
     defaultValues: {
       name: '',
       description: '',
       setting: '',
+      bannerUrl: null,
       ...defaultValues,
     },
   });
@@ -108,6 +124,29 @@ export function CampaignForm({
             </FormItem>
           )}
         />
+
+        {showBanner ? (
+          <FormField
+            control={form.control}
+            name="bannerUrl"
+            render={({ field }) => (
+              <FormItem>
+                <FormControl>
+                  <ImageUpload
+                    purpose={UploadPurpose.BANNER}
+                    label="Campaign banner (optional)"
+                    currentUrl={field.value}
+                    previewAlt="Campaign banner preview"
+                    onUploadComplete={(publicUrl) => field.onChange(publicUrl)}
+                    onClear={() => field.onChange(null)}
+                    disabled={isSubmitting}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        ) : null}
 
         <Button type="submit" disabled={isSubmitting} aria-busy={isSubmitting}>
           {isSubmitting ? (

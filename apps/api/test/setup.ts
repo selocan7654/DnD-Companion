@@ -30,6 +30,12 @@ function ensureTestEnv(): void {
   process.env.JWT_ACCESS_EXPIRES_IN = process.env.JWT_ACCESS_EXPIRES_IN ?? '15m';
   process.env.JWT_REFRESH_EXPIRES_IN = process.env.JWT_REFRESH_EXPIRES_IN ?? '30d';
   process.env.FRONTEND_URL = process.env.FRONTEND_URL ?? 'http://localhost:5173';
+  process.env.S3_REGION = process.env.S3_REGION ?? 'auto';
+  process.env.S3_ENDPOINT = process.env.S3_ENDPOINT ?? 'https://s3.test.example.com';
+  process.env.S3_ACCESS_KEY = process.env.S3_ACCESS_KEY ?? 'test-access-key';
+  process.env.S3_SECRET_KEY = process.env.S3_SECRET_KEY ?? 'test-secret-key';
+  process.env.S3_BUCKET = process.env.S3_BUCKET ?? 'test-bucket';
+  process.env.S3_PUBLIC_URL = process.env.S3_PUBLIC_URL ?? 'https://cdn.test.example.com';
 }
 
 ensureTestEnv();

@@ -8,6 +8,7 @@ export const homebrewFormSchema = z
     name: z.string().min(1, 'Name is required').max(200, 'Name must be at most 200 characters'),
     type: z.nativeEnum(HomebrewType, { required_error: 'Type is required' }),
     description: z.string().max(5000).optional(),
+    imageUrl: z.string().url('Image URL must be a valid URL').max(500).nullable().optional(),
     data: z.record(z.unknown()),
   })
   .superRefine((values, ctx) => {

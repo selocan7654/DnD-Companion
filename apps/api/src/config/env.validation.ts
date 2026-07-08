@@ -15,6 +15,12 @@ const envSchema = z.object({
   SMTP_USER: z.string().email().optional(),
   SMTP_PASS: z.string().min(1).optional(),
   SMTP_FROM: z.string().min(1).optional(),
+  S3_REGION: z.string().default('auto'),
+  S3_ENDPOINT: z.string().url('S3_ENDPOINT must be a valid URL'),
+  S3_ACCESS_KEY: z.string().min(1, 'S3_ACCESS_KEY is required'),
+  S3_SECRET_KEY: z.string().min(1, 'S3_SECRET_KEY is required'),
+  S3_BUCKET: z.string().min(1, 'S3_BUCKET is required'),
+  S3_PUBLIC_URL: z.string().url('S3_PUBLIC_URL must be a valid URL'),
   SEED_ADMIN_EMAIL: z.string().email().optional(),
   SEED_ADMIN_PASSWORD: z.string().min(8).optional(),
 });

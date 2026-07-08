@@ -13,6 +13,7 @@ import { HomebrewModule } from './homebrew/homebrew.module';
 import { CollectionsModule } from './collections/collections.module';
 import { ReferenceModule } from './reference/reference.module';
 import { WebsocketModule } from './websocket/websocket.module';
+import { UploadsModule } from './uploads/uploads.module';
 import { EmailVerifiedGuard } from './common/guards/email-verified.guard';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
@@ -67,6 +68,7 @@ import { HealthModule } from './health/health.module';
     CollectionsModule,
     ReferenceModule,
     WebsocketModule,
+    UploadsModule,
     AdminModule,
   ],
   providers: [

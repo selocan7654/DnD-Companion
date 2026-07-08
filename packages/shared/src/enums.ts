@@ -37,6 +37,13 @@ export enum HomebrewType {
   SUBCLASS = 'SUBCLASS',
 }
 
+export enum UploadPurpose {
+  AVATAR = 'avatar',
+  PORTRAIT = 'portrait',
+  BANNER = 'banner',
+  HOMEBREW_IMAGE = 'homebrew-image',
+}
+
 export enum Source {
   PHB = 'PHB',
   DMG = 'DMG',
