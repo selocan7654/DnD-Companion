@@ -4,9 +4,12 @@ import type {
   CampaignListItem,
   CampaignListQuery,
   CampaignMember,
+  CreateDmNoteInput,
+  DmNote,
   InvitePreview,
   InviteRegenerateResponse,
   PaginatedResponse,
+  UpdateDmNoteInput,
 } from '../../types/api';
 import type { CreateCampaignInput, UpdateCampaignInput } from '@dnd-companion/shared';
 import { baseApi } from './baseApi';
@@ -89,6 +92,50 @@ export const campaignsApi = baseApi.injectEndpoints({
       }),
       invalidatesTags: ['CampaignList'],
     }),
+    getDmNotes: builder.query<ApiResponse<DmNote[]>, string>({
+      query: (campaignId) => `/campaigns/${campaignId}/dm-notes`,
+      providesTags: (_result, _error, campaignId) => [{ type: 'DmNote', id: campaignId }],
+    }),
+    createDmNote: builder.mutation<
+      ApiResponse<DmNote>,
+      { campaignId: string; body: CreateDmNoteInput }
+    >({
+      query: ({ campaignId, body }) => ({
+        url: `/campaigns/${campaignId}/dm-notes`,
+        method: 'POST',
+        body,
+      }),
+      invalidatesTags: (_result, _error, { campaignId }) => [{ type: 'DmNote', id: campaignId }],
+    }),
+    updateDmNote: builder.mutation<
+      ApiResponse<DmNote>,
+      { campaignId: string; noteId: string; body: UpdateDmNoteInput }
+    >({
+      query: ({ campaignId, noteId, body }) => ({
+        url: `/campaigns/${campaignId}/dm-notes/${noteId}`,
+        method: 'PATCH',
+        body,
+      }),
+      invalidatesTags: (_result, _error, { campaignId }) => [{ type: 'DmNote', id: campaignId }],
+    }),
+    deleteDmNote: builder.mutation<void, { campaignId: string; noteId: string }>({
+      query: ({ campaignId, noteId }) => ({
+        url: `/campaigns/${campaignId}/dm-notes/${noteId}`,
+        method: 'DELETE',
+      }),
+      invalidatesTags: (_result, _error, { campaignId }) => [{ type: 'DmNote', id: campaignId }],
+    }),
+    reorderDmNotes: builder.mutation<
+      ApiResponse<DmNote[]>,
+      { campaignId: string; noteIds: string[] }
+    >({
+      query: ({ campaignId, noteIds }) => ({
+        url: `/campaigns/${campaignId}/dm-notes/reorder`,
+        method: 'PATCH',
+        body: { noteIds },
+      }),
+      invalidatesTags: (_result, _error, { campaignId }) => [{ type: 'DmNote', id: campaignId }],
+    }),
   }),
 });
 
@@ -104,4 +151,9 @@ export const {
   useRemoveCampaignMemberMutation,
   usePreviewInviteQuery,
   useJoinCampaignMutation,
+  useGetDmNotesQuery,
+  useCreateDmNoteMutation,
+  useUpdateDmNoteMutation,
+  useDeleteDmNoteMutation,
+  useReorderDmNotesMutation,
 } = campaignsApi;

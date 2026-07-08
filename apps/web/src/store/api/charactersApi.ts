@@ -4,6 +4,8 @@ import type {
   ApiResponse,
   Character,
   CharacterListQuery,
+  LiveFieldsResponse,
+  LiveFieldsUpdate,
   PaginatedResponse,
 } from '../../types/api';
 import { baseApi } from './baseApi';
@@ -74,6 +76,17 @@ export const charactersApi = baseApi.injectEndpoints({
       }),
       invalidatesTags: (_result, _error, { id }) => ['CharacterList', { type: 'Character', id }],
     }),
+    /** Persist live fields; UI cache is patched via WebSocket (no tag invalidate / full refetch). */
+    updateLiveFields: builder.mutation<
+      ApiResponse<LiveFieldsResponse>,
+      { id: string; body: LiveFieldsUpdate }
+    >({
+      query: ({ id, body }) => ({
+        url: `/characters/${id}/live`,
+        method: 'PATCH',
+        body,
+      }),
+    }),
   }),
 });
 
@@ -85,4 +98,5 @@ export const {
   useDeleteCharacterMutation,
   useAssignCampaignMutation,
   useSetVisibilityMutation,
+  useUpdateLiveFieldsMutation,
 } = charactersApi;
