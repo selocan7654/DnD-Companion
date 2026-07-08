@@ -1,5 +1,5 @@
 import { Link, Outlet } from 'react-router-dom';
-import { BookOpen, Swords } from 'lucide-react';
+import { BookOpen, Library, Swords } from 'lucide-react';
 
 interface PublicLayoutProps {
   children?: React.ReactNode;
@@ -23,6 +23,13 @@ export function PublicLayout({ children }: PublicLayoutProps) {
             DnD Companion
           </Link>
           <div className="flex items-center gap-4">
+            <Link
+              to="/reference/spells"
+              className="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground"
+            >
+              <Library className="h-4 w-4" aria-hidden="true" />
+              Reference
+            </Link>
             <Link
               to="/homebrew"
               className="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground"

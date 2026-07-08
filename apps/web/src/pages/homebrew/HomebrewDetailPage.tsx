@@ -6,6 +6,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
+import { CollectionToggle } from '@/features/collections/CollectionToggle';
 import { HomebrewStatusBadge } from '@/features/homebrew/HomebrewCard';
 import { formatHomebrewSource, formatHomebrewType } from '@/features/homebrew/homebrewUtils';
 import { StatBlock } from '@/features/homebrew/StatBlock';
@@ -117,43 +118,46 @@ function HomebrewDetailContent() {
             </div>
           </div>
 
-          {canEditHomebrew ? (
-            <div className="flex flex-wrap gap-2">
-              <Button asChild variant="outline" size="sm">
-                <Link to={`/homebrew/${item.id}/edit`}>
-                  <Pencil className="h-4 w-4" aria-hidden="true" />
-                  Edit
-                </Link>
-              </Button>
-              {item.status === 'DRAFT' ? (
+          <div className="flex flex-wrap gap-2">
+            <CollectionToggle homebrewItemId={item.id} isPublished={item.status === 'PUBLISHED'} />
+            {canEditHomebrew ? (
+              <>
+                <Button asChild variant="outline" size="sm">
+                  <Link to={`/homebrew/${item.id}/edit`}>
+                    <Pencil className="h-4 w-4" aria-hidden="true" />
+                    Edit
+                  </Link>
+                </Button>
+                {item.status === 'DRAFT' ? (
+                  <Button
+                    size="sm"
+                    disabled={!isEmailVerified || isPublishing}
+                    onClick={() => void handlePublish()}
+                  >
+                    {isPublishing ? 'Publishing…' : 'Publish'}
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={isUnpublishing}
+                    onClick={() => void handleUnpublish()}
+                  >
+                    {isUnpublishing ? 'Unpublishing…' : 'Unpublish'}
+                  </Button>
+                )}
                 <Button
                   size="sm"
-                  disabled={!isEmailVerified || isPublishing}
-                  onClick={() => void handlePublish()}
+                  variant="destructive"
+                  aria-label="Delete homebrew"
+                  onClick={() => setShowDeleteConfirm(true)}
                 >
-                  {isPublishing ? 'Publishing…' : 'Publish'}
+                  <Trash2 className="h-4 w-4" aria-hidden="true" />
+                  Delete
                 </Button>
-              ) : (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  disabled={isUnpublishing}
-                  onClick={() => void handleUnpublish()}
-                >
-                  {isUnpublishing ? 'Unpublishing…' : 'Unpublish'}
-                </Button>
-              )}
-              <Button
-                size="sm"
-                variant="destructive"
-                aria-label="Delete homebrew"
-                onClick={() => setShowDeleteConfirm(true)}
-              >
-                <Trash2 className="h-4 w-4" aria-hidden="true" />
-                Delete
-              </Button>
-            </div>
-          ) : null}
+              </>
+            ) : null}
+          </div>
         </div>
 
         {item.ownerUsername ? (

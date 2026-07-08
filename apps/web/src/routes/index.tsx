@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react';
-import { createBrowserRouter } from 'react-router-dom';
+import { createBrowserRouter, Navigate } from 'react-router-dom';
 
 import { LoadingSpinner } from '@/components/LoadingSpinner';
 import { ProtectedRoute } from '@/features/auth/ProtectedRoute';
@@ -21,12 +21,15 @@ import { CampaignListPage } from '@/pages/campaigns/CampaignListPage';
 import { CharacterDetailPage } from '@/pages/characters/CharacterDetailPage';
 import { CharacterEditRedirect } from '@/pages/characters/CharacterEditRedirect';
 import { CharacterListPage } from '@/pages/characters/CharacterListPage';
+import { MyCollectionPage } from '@/pages/collection/MyCollectionPage';
 import { HomebrewCreatePage } from '@/pages/homebrew/HomebrewCreatePage';
 import { HomebrewDetailPage } from '@/pages/homebrew/HomebrewDetailPage';
 import { HomebrewEditPage } from '@/pages/homebrew/HomebrewEditPage';
 import { HomebrewGalleryPage } from '@/pages/homebrew/HomebrewGalleryPage';
 import { MyCreationsPage } from '@/pages/homebrew/MyCreationsPage';
 import { InvitePage } from '@/pages/invite/InvitePage';
+import { ReferenceDetailPage } from '@/pages/reference/ReferenceDetailPage';
+import { ReferenceListPage } from '@/pages/reference/ReferenceListPage';
 
 const CharacterBuilderPage = lazy(() =>
   import('@/pages/characters/CharacterBuilderPage').then((module) => ({
@@ -83,6 +86,18 @@ export const router = createBrowserRouter([
         element: <HomebrewDetailPage />,
       },
       {
+        path: '/reference',
+        element: <Navigate to="/reference/spells" replace />,
+      },
+      {
+        path: '/reference/:type',
+        element: <ReferenceListPage />,
+      },
+      {
+        path: '/reference/:type/:id',
+        element: <ReferenceDetailPage />,
+      },
+      {
         path: '/',
         element: <RootRedirect />,
       },
@@ -103,6 +118,7 @@ export const router = createBrowserRouter([
               { path: '/homebrew/new', element: <HomebrewCreatePage /> },
               { path: '/homebrew/:id/edit', element: <HomebrewEditPage /> },
               { path: '/my-creations', element: <MyCreationsPage /> },
+              { path: '/my-collection', element: <MyCollectionPage /> },
             ],
           },
           {
