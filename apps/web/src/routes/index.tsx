@@ -33,6 +33,7 @@ import { HomebrewEditPage } from '@/pages/homebrew/HomebrewEditPage';
 import { HomebrewGalleryPage } from '@/pages/homebrew/HomebrewGalleryPage';
 import { MyCreationsPage } from '@/pages/homebrew/MyCreationsPage';
 import { InvitePage } from '@/pages/invite/InvitePage';
+import { NotFoundPage } from '@/pages/errors/NotFoundPage';
 import { ReferenceDetailPage } from '@/pages/reference/ReferenceDetailPage';
 import { ReferenceListPage } from '@/pages/reference/ReferenceListPage';
 
@@ -210,7 +211,8 @@ export const router = createBrowserRouter([
       },
       {
         path: '*',
-        element: <RootRedirect />,
+        element: <MinimalLayout />,
+        children: [{ path: '*', element: <NotFoundPage /> }],
       },
     ],
   },

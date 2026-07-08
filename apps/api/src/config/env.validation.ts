@@ -23,6 +23,7 @@ const envSchema = z.object({
   S3_PUBLIC_URL: z.string().url('S3_PUBLIC_URL must be a valid URL'),
   SEED_ADMIN_EMAIL: z.string().email().optional(),
   SEED_ADMIN_PASSWORD: z.string().min(8).optional(),
+  SENTRY_DSN: z.string().optional(),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

@@ -5,6 +5,8 @@ import path from 'node:path';
 import { defineConfig } from 'vite';
 
 export default defineConfig({
+  envDir: path.resolve(__dirname, '../..'),
+  envPrefix: ['VITE_', 'SENTRY_'],
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {

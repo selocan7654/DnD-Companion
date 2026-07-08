@@ -27,6 +27,8 @@
     "@nestjs/throttler": "^6.5.0",
     "@nestjs/websockets": "^10.4.22",
     "@prisma/client": "^6.1.0",
+    "@sentry/nestjs": "^10.64.0",
+    "@sentry/node": "^10.64.0",
     "@socket.io/redis-adapter": "^8.3.0",
     "argon2": "^0.41.1",
     "class-transformer": "^0.5.1",
