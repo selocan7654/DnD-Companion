@@ -6,6 +6,9 @@ import helmet from 'helmet';
 
 import { AppModule } from './app.module';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
+import { initSentry } from './common/sentry/init-sentry';
+
+initSentry();
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });

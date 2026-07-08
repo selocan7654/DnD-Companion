@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Logger,
 } from '@nestjs/common';
+import * as Sentry from '@sentry/nestjs';
 import { Response } from 'express';
 
 interface ErrorBody {
@@ -49,6 +50,12 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     }
 
     if (statusCode >= HttpStatus.INTERNAL_SERVER_ERROR) {
+      if (exception instanceof Error) {
+        Sentry.captureException(exception);
+      } else {
+        Sentry.captureMessage('Unknown server error', 'error');
+      }
+
       this.logger.error(
         exception instanceof Error ? exception.message : 'Unknown error',
         exception instanceof Error ? exception.stack : undefined,
