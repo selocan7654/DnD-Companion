@@ -189,6 +189,81 @@ export interface MyCreationsQuery {
   limit?: number;
 }
 
+export interface CollectionItem {
+  homebrewItemId: string;
+  name: string;
+  type: HomebrewType;
+  source: HomebrewSource;
+  status: HomebrewStatus;
+  isUnpublished: boolean;
+  ownerUsername: string | null;
+  addedAt: string;
+}
+
+export interface CollectionQuery {
+  search?: string;
+  type?: HomebrewType;
+  cursor?: string;
+  limit?: number;
+}
+
+export type ReferenceTypeSlug =
+  | 'spells'
+  | 'monsters'
+  | 'feats'
+  | 'backgrounds'
+  | 'magic-items'
+  | 'subclasses'
+  | 'classes'
+  | 'races';
+
+export interface ReferenceListItem {
+  id: string;
+  name: string;
+  type: HomebrewType;
+  source: HomebrewSource;
+  description: string | null;
+  imageUrl: string | null;
+  createdAt: string;
+}
+
+export interface ReferenceItem extends ReferenceListItem {
+  data: Record<string, unknown>;
+  publishedAt: string | null;
+  updatedAt: string;
+}
+
+export interface ReferenceListQuery {
+  search?: string;
+  source?: HomebrewSource;
+  sort?: 'name' | 'createdAt';
+  order?: 'asc' | 'desc';
+  cursor?: string;
+  limit?: number;
+  level?: number;
+  school?: string;
+  class?: string;
+  challengeRating?: string;
+  creatureType?: string;
+  size?: string;
+  rarity?: string;
+  parentClass?: string;
+}
+
+export interface DndClassRef {
+  name: string;
+  hitDie: number;
+  primaryAbility: string;
+  savingThrows: [string, string];
+}
+
+export interface DndRaceRef {
+  name: string;
+  speed: number;
+  size: string;
+  source: string;
+}
+
 export interface Character {
   id: string;
   ownerId: string;

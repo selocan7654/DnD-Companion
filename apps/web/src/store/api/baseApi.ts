@@ -82,6 +82,7 @@ export const baseApi = createApi({
     'Homebrew',
     'HomebrewList',
     'MyCreations',
+    'Collection',
   ],
   endpoints: () => ({}),
 });
