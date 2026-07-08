@@ -95,6 +95,28 @@ export class UsersService {
     ]);
   }
 
+  async deactivateSelf(userId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException();
+    }
+
+    if (!user.isActive) {
+      return;
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.user.update({
+        where: { id: userId },
+        data: { isActive: false },
+      }),
+      this.prisma.refreshToken.updateMany({
+        where: { userId, isRevoked: false },
+        data: { isRevoked: true },
+      }),
+    ]);
+  }
+
   async getPublicProfile(id: string) {
     const user = await this.prisma.user.findUnique({
       where: { id },
