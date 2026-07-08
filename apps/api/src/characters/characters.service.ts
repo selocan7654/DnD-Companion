@@ -13,11 +13,14 @@ import { AlreadyAssignedToCampaignException } from '../common/exceptions/already
 import { CampaignPolicy } from '../common/policies/campaign.policy';
 import { CharacterPolicy } from '../common/policies/character.policy';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { WebsocketGateway } from '../websocket/websocket.gateway';
+import { LiveFieldsPayload } from '../websocket/live-update.types';
 import { AssignCampaignDto } from './dto/assign-campaign.dto';
 import { CharacterListQueryDto } from './dto/character-list-query.dto';
 import { CreateCharacterDto } from './dto/create-character.dto';
 import { SetVisibilityDto } from './dto/set-visibility.dto';
 import { UpdateCharacterDto } from './dto/update-character.dto';
+import { UpdateLiveFieldsDto } from './dto/update-live-fields.dto';
 
 const characterInclude = {
   owner: { select: { username: true, avatarUrl: true, isActive: true } },
@@ -39,7 +42,10 @@ type CharacterLoaded = Character & {
 
 @Injectable()
 export class CharactersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly websocketGateway: WebsocketGateway,
+  ) {}
 
   async create(user: AuthUser, dto: CreateCharacterDto) {
     if (dto.campaignId) {
@@ -216,6 +222,77 @@ export class CharactersService {
     });
 
     return { data: this.toCharacterResponse(updated) };
+  }
+
+  async updateLiveFields(id: string, user: AuthUser, dto: UpdateLiveFieldsDto) {
+    const character = await this.loadCharacter(id);
+    if (!character || !CharacterPolicy.canRead(user, character)) {
+      throw new NotFoundException();
+    }
+
+    if (!CharacterPolicy.canUpdateLiveFields(user, character)) {
+      throw new ForbiddenException({
+        error: 'FORBIDDEN',
+        message: 'You do not have permission to update live fields for this character',
+      });
+    }
+
+    const data: Prisma.CharacterUpdateInput = {};
+    const fields: LiveFieldsPayload = {};
+
+    if (dto.hitPointsCurrent !== undefined) {
+      data.hitPointsCurrent = dto.hitPointsCurrent;
+      fields.hitPointsCurrent = dto.hitPointsCurrent;
+    }
+    if (dto.temporaryHitPoints !== undefined) {
+      data.temporaryHitPoints = dto.temporaryHitPoints;
+      fields.temporaryHitPoints = dto.temporaryHitPoints;
+    }
+    if (dto.deathSaves !== undefined) {
+      data.deathSaves = {
+        successes: dto.deathSaves.successes,
+        failures: dto.deathSaves.failures,
+      } as Prisma.InputJsonValue;
+      fields.deathSaves = {
+        successes: dto.deathSaves.successes,
+        failures: dto.deathSaves.failures,
+      };
+    }
+    if (dto.conditions !== undefined) {
+      data.conditions = dto.conditions as Prisma.InputJsonValue;
+      fields.conditions = dto.conditions;
+    }
+
+    if (Object.keys(fields).length === 0) {
+      throw new BadRequestException({
+        error: 'VALIDATION_ERROR',
+        message: 'At least one live field must be provided',
+      });
+    }
+
+    const updated = await this.prisma.character.update({
+      where: { id },
+      data,
+      include: characterInclude,
+    });
+
+    if (updated.campaignId && Object.keys(fields).length > 0) {
+      this.websocketGateway.broadcastLiveUpdate(updated.campaignId, {
+        characterId: updated.id,
+        characterName: updated.name,
+        fields,
+        updatedBy: user.username,
+      });
+    }
+
+    return {
+      data: {
+        hitPointsCurrent: updated.hitPointsCurrent,
+        temporaryHitPoints: updated.temporaryHitPoints,
+        deathSaves: updated.deathSaves,
+        conditions: updated.conditions,
+      },
+    };
   }
 
   private async loadCharacter(id: string): Promise<CharacterLoaded | null> {

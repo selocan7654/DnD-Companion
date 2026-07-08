@@ -309,6 +309,81 @@ describe('CharactersController (integration)', () => {
     });
   });
 
+  describe('PATCH /characters/:id/live', () => {
+    it('200 — owner updates live fields', async () => {
+      const owner = await createTestUser(prisma, { username: 'liveowner' });
+      const character = await createTestCharacter(prisma, owner.id);
+      const { accessToken } = await loginAsUser(app, owner.email, DEFAULT_TEST_PASSWORD);
+
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/characters/${character.id}/live`)
+        .set(authHeader(accessToken))
+        .send({
+          hitPointsCurrent: 18,
+          temporaryHitPoints: 3,
+          conditions: ['Poisoned'],
+          deathSaves: { successes: 1, failures: 0 },
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({
+        hitPointsCurrent: 18,
+        temporaryHitPoints: 3,
+        conditions: ['Poisoned'],
+        deathSaves: { successes: 1, failures: 0 },
+      });
+    });
+
+    it('200 — campaign DM updates assigned character live fields', async () => {
+      const dm = await createTestUser(prisma, { username: 'dmlive' });
+      const player = await createTestUser(prisma, { username: 'playerlive' });
+      const campaign = await createTestCampaign(prisma, dm.id);
+      await addCampaignMember(prisma, campaign.id, player.id);
+      const character = await createTestCharacter(prisma, player.id, { campaignId: campaign.id });
+      const { accessToken } = await loginAsUser(app, dm.email, DEFAULT_TEST_PASSWORD);
+
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/characters/${character.id}/live`)
+        .set(authHeader(accessToken))
+        .send({ hitPointsCurrent: 7 });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.hitPointsCurrent).toBe(7);
+    });
+
+    it('403 — campaign member cannot update live fields of another character', async () => {
+      const dm = await createTestUser(prisma, { username: 'dmlivedeny' });
+      const player = await createTestUser(prisma, { username: 'playerlivedeny' });
+      const otherMember = await createTestUser(prisma, { username: 'othermemberlive' });
+      const campaign = await createTestCampaign(prisma, dm.id);
+      await addCampaignMember(prisma, campaign.id, player.id);
+      await addCampaignMember(prisma, campaign.id, otherMember.id);
+      const character = await createTestCharacter(prisma, player.id, { campaignId: campaign.id });
+      const { accessToken } = await loginAsUser(app, otherMember.email, DEFAULT_TEST_PASSWORD);
+
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/characters/${character.id}/live`)
+        .set(authHeader(accessToken))
+        .send({ hitPointsCurrent: 1 });
+
+      expect(res.status).toBe(403);
+    });
+
+    it('404 — outsider cannot update live fields', async () => {
+      const owner = await createTestUser(prisma, { username: 'liveowner404' });
+      const stranger = await createTestUser(prisma, { username: 'livestranger' });
+      const character = await createTestCharacter(prisma, owner.id);
+      const { accessToken } = await loginAsUser(app, stranger.email, DEFAULT_TEST_PASSWORD);
+
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/characters/${character.id}/live`)
+        .set(authHeader(accessToken))
+        .send({ hitPointsCurrent: 1 });
+
+      expect(res.status).toBe(404);
+    });
+  });
+
   describe('DELETE /characters/:id', () => {
     it('204 — owner deletes character', async () => {
       const owner = await createTestUser(prisma, { username: 'chardelete' });

@@ -22,6 +22,7 @@ import { CharacterListQueryDto } from './dto/character-list-query.dto';
 import { CreateCharacterDto } from './dto/create-character.dto';
 import { SetVisibilityDto } from './dto/set-visibility.dto';
 import { UpdateCharacterDto } from './dto/update-character.dto';
+import { UpdateLiveFieldsDto } from './dto/update-live-fields.dto';
 
 @Controller('characters')
 export class CharactersController {
@@ -80,5 +81,15 @@ export class CharactersController {
     @Body() dto: SetVisibilityDto,
   ) {
     return this.charactersService.setVisibility(id, user, dto);
+  }
+
+  @Patch(':id/live')
+  @RequireVerifiedEmail()
+  updateLiveFields(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateLiveFieldsDto,
+  ) {
+    return this.charactersService.updateLiveFields(id, user, dto);
   }
 }
