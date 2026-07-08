@@ -26,6 +26,7 @@ import { CharacterDetailPage } from '@/pages/characters/CharacterDetailPage';
 import { CharacterEditRedirect } from '@/pages/characters/CharacterEditRedirect';
 import { CharacterListPage } from '@/pages/characters/CharacterListPage';
 import { MyCollectionPage } from '@/pages/collection/MyCollectionPage';
+import { ProfilePage } from '@/pages/profile/ProfilePage';
 import { HomebrewCreatePage } from '@/pages/homebrew/HomebrewCreatePage';
 import { HomebrewDetailPage } from '@/pages/homebrew/HomebrewDetailPage';
 import { HomebrewEditPage } from '@/pages/homebrew/HomebrewEditPage';
@@ -151,6 +152,7 @@ export const router = createBrowserRouter([
               { path: '/homebrew/:id/edit', element: <HomebrewEditPage /> },
               { path: '/my-creations', element: <MyCreationsPage /> },
               { path: '/my-collection', element: <MyCollectionPage /> },
+              { path: '/profile', element: <ProfilePage /> },
             ],
           },
           {
