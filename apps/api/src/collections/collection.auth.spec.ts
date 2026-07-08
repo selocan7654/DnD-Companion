@@ -221,6 +221,21 @@ describe('Collection auth matrix (integration)', () => {
       expect(res.status).toBe(404);
     });
 
+    it('404 — ADMIN cannot add draft homebrew', async () => {
+      const owner = await createTestUser(prisma, { username: 'coldraftadminowner' });
+      const draft = await createTestHomebrew(prisma, owner.id, {
+        name: 'Admin Draft Feat',
+        status: HomebrewStatus.DRAFT,
+      });
+      const { accessToken } = await loginAdmin();
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/collections/${draft.id}`)
+        .set(authHeader(accessToken));
+
+      expect(res.status).toBe(404);
+    });
+
     it('404 — otherUser cannot add draft homebrew', async () => {
       const owner = await createTestUser(prisma, { username: 'coldraftotherowner' });
       const draft = await createTestHomebrew(prisma, owner.id, {
@@ -234,6 +249,36 @@ describe('Collection auth matrix (integration)', () => {
 
       expect(res.status).toBe(404);
     });
+
+    it('403 — unverified user cannot add draft (email gate before resource)', async () => {
+      const owner = await createTestUser(prisma, { username: 'coldraftunvowner' });
+      const draft = await createTestHomebrew(prisma, owner.id, {
+        status: HomebrewStatus.DRAFT,
+      });
+      const unverified = await createTestUser(prisma, {
+        username: 'coldraftunverified',
+        emailVerifiedAt: null,
+      });
+      const { accessToken } = await loginAsUser(app, unverified.email, DEFAULT_TEST_PASSWORD);
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/collections/${draft.id}`)
+        .set(authHeader(accessToken));
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toBe('EMAIL_NOT_VERIFIED');
+    });
+
+    it('401 — guest cannot add draft homebrew', async () => {
+      const owner = await createTestUser(prisma, { username: 'coldraftguestowner' });
+      const draft = await createTestHomebrew(prisma, owner.id, {
+        status: HomebrewStatus.DRAFT,
+      });
+
+      const res = await request(app.getHttpServer()).post(`/api/v1/collections/${draft.id}`);
+
+      expect(res.status).toBe(401);
+    });
   });
 
   describe('POST /collections/:homebrewItemId (duplicate)', () => {
@@ -244,6 +289,24 @@ describe('Collection auth matrix (integration)', () => {
       });
       await prisma.collectionItem.create({
         data: { userId: user.id, homebrewItemId: published.id },
+      });
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/collections/${published.id}`)
+        .set(authHeader(accessToken));
+
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe('ALREADY_IN_COLLECTION');
+    });
+
+    it('409 — ADMIN cannot add duplicate item', async () => {
+      const { admin, accessToken } = await loginAdmin();
+      const published = await createOfficialHomebrew(prisma, {
+        name: 'Admin Dup Official',
+        type: HomebrewType.FEAT,
+      });
+      await prisma.collectionItem.create({
+        data: { userId: admin.id, homebrewItemId: published.id },
       });
 
       const res = await request(app.getHttpServer())
@@ -269,6 +332,39 @@ describe('Collection auth matrix (integration)', () => {
         .set(authHeader(accessToken));
 
       expect(res.status).toBe(409);
+    });
+
+    it('403 — unverified user cannot add duplicate (email gate)', async () => {
+      const owner = await createTestUser(prisma, { username: 'coldupunvowner' });
+      const published = await createTestHomebrew(prisma, owner.id, {
+        status: HomebrewStatus.PUBLISHED,
+      });
+      const unverified = await createTestUser(prisma, {
+        username: 'coldupunverified',
+        emailVerifiedAt: null,
+      });
+      await prisma.collectionItem.create({
+        data: { userId: unverified.id, homebrewItemId: published.id },
+      });
+      const { accessToken } = await loginAsUser(app, unverified.email, DEFAULT_TEST_PASSWORD);
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/collections/${published.id}`)
+        .set(authHeader(accessToken));
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toBe('EMAIL_NOT_VERIFIED');
+    });
+
+    it('401 — guest cannot add duplicate', async () => {
+      const owner = await createTestUser(prisma, { username: 'coldupguestowner' });
+      const published = await createTestHomebrew(prisma, owner.id, {
+        status: HomebrewStatus.PUBLISHED,
+      });
+
+      const res = await request(app.getHttpServer()).post(`/api/v1/collections/${published.id}`);
+
+      expect(res.status).toBe(401);
     });
   });
 
